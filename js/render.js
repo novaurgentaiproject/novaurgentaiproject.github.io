@@ -5,7 +5,7 @@ import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import { getModel } from './models.js';
 import { settings, emit } from './state.js';
-import { wrapUI, buildWidget } from './tools/genui.js';
+import { wrapUI, buildWidget, upgradeLegacyUI } from './tools/genui.js';
 import { generateImage, ASPECTS } from './tools/imagegen.js';
 import { fileBadge, fileKindLabel, describeAttachment } from './tools/files.js';
 
@@ -64,7 +64,7 @@ ${closed ? `<div class="actions"><button class="icon-btn" data-action="file-prev
 }
 
 function uiBlock(ctx, body, { closed, attrs, index, streaming }) {
-  let html = body;
+  let html = upgradeLegacyUI(body);
   let title = attrs.title || 'Interactive view';
   if (attrs.widget) {
     const w = buildWidget(attrs.widget, attrs);

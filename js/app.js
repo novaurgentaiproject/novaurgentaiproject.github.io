@@ -38,6 +38,22 @@ const els = {
   scrollDown: $('#scroll-down'), recorder: $('#recorder'), fileInput: $('#file-input'), drop: $('#drop-overlay'), shareBanner: $('#share-banner'),
 };
 
+// Home Screen app: remember the open chat so relaunching resumes it.
+const STANDALONE = document.documentElement.classList.contains('standalone');
+function rememberChat(chat) {
+  if (!STANDALONE) return;
+  try {
+    if (chat && !chat.temporary && chat.messages.length) localStorage.setItem('nova:last', JSON.stringify({ id: chat.id, at: Date.now() }));
+    else localStorage.removeItem('nova:last');
+  } catch { /* storage unavailable */ }
+}
+function lastChatId() {
+  try {
+    const last = JSON.parse(localStorage.getItem('nova:last') || 'null');
+    return last && Date.now() - last.at < 6 * 3600e3 ? last.id : null;
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------------------
 // Settings / chrome
 // ---------------------------------------------------------------------------
@@ -186,6 +202,7 @@ function newChat({ agentId = null, temporary = false } = {}) {
   updateTopbar();
   updatePlaceholder();
   if (location.hash) history.replaceState(null, '', location.pathname);
+  rememberChat(null);
   if (innerWidth <= 820) toggleSidebar(true);
   els.prompt.focus();
 }
@@ -205,6 +222,7 @@ function openChat(id) {
   updateTopbar();
   updatePlaceholder();
   history.replaceState(null, '', `#c=${id}`);
+  rememberChat(c);
   if (innerWidth <= 820) toggleSidebar(true);
 }
 
@@ -283,6 +301,7 @@ async function send(text, { tool = S.tool, attachments = null } = {}) {
   }
   setStageEmpty();
   if (!chat.temporary) history.replaceState(null, '', `#c=${chat.id}`);
+  rememberChat(chat);
   renderSidebar();
   updateTopbar();
   S.stick = true;
@@ -1002,7 +1021,7 @@ async function boot() {
   const hash = location.hash.slice(1);
   if (hash.startsWith('share=')) await openShared(hash.slice(6));
   else {
-    const id = new URLSearchParams(hash).get('c');
+    const id = new URLSearchParams(hash).get('c') || (STANDALONE ? lastChatId() : null);
     if (id && chats.has(id)) openChat(id); else newChat();
   }
   const q = new URLSearchParams(location.search).get('q');

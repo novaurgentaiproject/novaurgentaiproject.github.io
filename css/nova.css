@@ -1003,3 +1003,75 @@ kbd {
 /* Slots collapse when empty */
 [data-slot]:empty { display: none; }
 .msg.assistant .body > [data-slot="actions"] { margin-top: 2px; }
+
+/* ==========================================================================
+   Home Screen app — applies only when Nova is launched from the Home Screen
+   (html.standalone is set in index.html). The in-browser site is unaffected.
+   ========================================================================== */
+html.standalone, html.standalone body { overscroll-behavior: none; }
+html.standalone { -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%; }
+html.standalone .scroller, html.standalone .sidebar-scroll, html.standalone .modal-body,
+html.standalone .settings-panel, html.standalone .menu, html.standalone .console { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+html.standalone button, html.standalone a, html.standalone summary, html.standalone .chat-link { touch-action: manipulation; }
+
+/* Interface chrome behaves like a native app: no text selection or long-press callouts. */
+html.standalone .sidebar, html.standalone .topbar, html.standalone .composer-bar, html.standalone .menu,
+html.standalone .msg-actions, html.standalone .user-actions, html.standalone .home-hero, html.standalone .home-suggest,
+html.standalone .canvas-head, html.standalone .canvas-tabs, html.standalone .canvas-actions, html.standalone .code-head,
+html.standalone .card-head, html.standalone .modal-head, html.standalone .settings-tabs, html.standalone .voice-mode,
+html.standalone .tool-chip, html.standalone .attach-row, html.standalone .thinking summary, html.standalone .followups {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+html.standalone .brand img, html.standalone .home-orb img, html.standalone .msg.assistant .av img { -webkit-touch-callout: none; pointer-events: none; }
+
+/* Safe areas: status bar, home indicator and landscape notches. */
+html.standalone .sidebar { padding-left: env(safe-area-inset-left); }
+html.standalone .sidebar-head { height: calc(var(--topbar-h) + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+html.standalone .sidebar-foot { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+html.standalone .main { padding-right: env(safe-area-inset-right); }
+html.standalone .app.sidebar-collapsed .main { padding-left: env(safe-area-inset-left); }
+html.standalone .topbar { height: calc(var(--topbar-h) + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+html.standalone .dock { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+html.standalone .modal-backdrop {
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+html.standalone .toast-root { bottom: calc(22px + env(safe-area-inset-bottom)); }
+html.standalone .voice-mode { padding: calc(24px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom)); }
+html.standalone .lightbox .lb-top { padding-top: calc(12px + env(safe-area-inset-top)); }
+html.standalone .lightbox .lb-img { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+html.standalone .ui-card.fullscreen { top: calc(12px + env(safe-area-inset-top)); bottom: calc(12px + env(safe-area-inset-bottom)); }
+html.standalone .canvas-panel { padding-right: env(safe-area-inset-right); }
+html.standalone .canvas-head { height: calc(var(--topbar-h) + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+html.standalone .canvas-actions { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+
+/* iOS shows white status-bar text over the app; in Daylight give it a branded backdrop. */
+html.standalone.ios[data-theme="light"] body::before {
+  content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); z-index: 600; pointer-events: none;
+  background: linear-gradient(90deg, #1e3a8a, #5b21b6);
+}
+
+/* Fonts of 16px+ stop iOS from zooming into fields on focus. */
+html.standalone input:not([type="range"]):not([type="checkbox"]):not([type="color"]), html.standalone textarea, html.standalone select { font-size: max(16px, 1em); }
+html.standalone .editor pre, html.standalone .editor textarea, html.standalone .editor .gutter { font-size: 16px; }
+
+/* Bigger touch targets and always-visible controls on touch screens. */
+@media (pointer: coarse) {
+  html.standalone .icon-btn { width: 40px; height: 40px; }
+  html.standalone .msg-actions .icon-btn, html.standalone .user-actions .icon-btn { width: 38px; height: 38px; }
+  html.standalone .send-btn { width: 40px; height: 40px; }
+  html.standalone .nav-item { padding: 11px 10px; }
+  html.standalone .chat-item a, html.standalone .chat-item .chat-link { padding: 10px; }
+  html.standalone .chat-item .more { opacity: 1; }
+  html.standalone .menu .menu-item { padding: 12px; }
+  html.standalone .user-actions { opacity: 1; }
+  html.standalone .nav-item .kbd { display: none; }
+}
+
+@media (max-width: 1100px) {
+  html.standalone .canvas-panel { padding-left: env(safe-area-inset-left); }
+}
+@media (max-width: 820px) {
+  html.standalone .main { padding-left: env(safe-area-inset-left); }
+  html.standalone .modal-backdrop { padding: env(safe-area-inset-top) 0 0; }
+  html.standalone .modal { padding-bottom: env(safe-area-inset-bottom); }
+}

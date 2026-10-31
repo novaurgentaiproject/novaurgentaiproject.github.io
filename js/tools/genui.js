@@ -26,6 +26,12 @@ table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{padding:7px 8px
 .ask{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;font:inherit;font-size:13px;text-decoration:none}
 .ask:hover{background:var(--card2);border-color:var(--accent)}
 .fade{animation:fade .3s ease}@keyframes fade{from{opacity:0;transform:translateY(4px)}}
+.nv-ico{position:relative;display:inline-block;width:18px;height:18px;flex:none;transition:transform .2s ease}.nv-ico::before,.nv-ico::after{content:"";position:absolute}
+.ask:hover .nv-ico{transform:translateY(-1px) scale(1.06)}
+.nv-ico-shirt::before{inset:1px 0 0;background:radial-gradient(circle at 50% 0,rgba(10,14,40,.55) 0 19%,transparent 20%),linear-gradient(160deg,#8fb0ff,#9d6bff 60%,#c49bff);clip-path:polygon(29% 0,40% 0,45% 9%,55% 9%,60% 0,71% 0,100% 21%,89% 43%,77% 35%,77% 100%,23% 100%,23% 35%,11% 43%,0 21%)}
+.nv-ico-shirt::after{left:24%;right:24%;bottom:3px;height:1.5px;border-radius:2px;background:rgba(255,255,255,.4)}
+.nv-ico-map::before{inset:4px 0 1px;background:linear-gradient(90deg,#5b84ff 0 33.4%,#7f6bff 33.4% 66.7%,#a98bff 66.7%);clip-path:polygon(0 14%,33.4% 0,66.7% 14%,100% 0,100% 86%,66.7% 100%,33.4% 86%,0 100%)}
+.nv-ico-map::after{width:9px;height:9px;left:50%;top:0;margin-left:-4.5px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:radial-gradient(circle,#fff 0 24%,#ff5d8f 28%);box-shadow:0 1px 3px rgba(0,0,0,.45)}
 `;
 
 const BRIDGE = `(function(){var id="__ID__";var last=0;function post(){var h=Math.ceil(Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0));if(Math.abs(h-last)>2){last=h;parent.postMessage({type:"nova-ui-size",id:id,height:h},"*")}}
@@ -499,6 +505,13 @@ document.getElementById("f").onsubmit=function(e){e.preventDefault();var n=docum
 
 export const WIDGETS = W;
 
+/** Update interfaces saved by earlier versions (weather buttons used emojis). */
+export function upgradeLegacyUI(html) {
+  return String(html)
+    .replace(/>\u{1F455}\s*What should I wear\?</gu, '><span class="nv-ico nv-ico-shirt" aria-hidden="true"></span>What should I wear?<')
+    .replace(/>\u{1F5FA}\uFE0F?\s*Plan my day</gu, '><span class="nv-ico nv-ico-map" aria-hidden="true"></span>Plan my day<');
+}
+
 export function matchWidget(text) {
   const t = text.toLowerCase();
   // Specific tools (mortgage, tip, BMI, budget…) win over generic calculator/planner matches.
@@ -540,7 +553,7 @@ export function weatherWidget({ place, data, wmo }) {
 <div class="card" style="margin-top:12px"><h3>7-day forecast</h3>
 ${days.map((x) => `<div class="row" style="padding:7px 0;border-bottom:1px solid var(--border)"><span style="width:56px">${esc(x.day)}</span><span style="width:32px;font-size:20px">${x.w.emoji}</span><span class="small muted" style="width:46px">${x.rain ? '☔' + x.rain + '%' : ''}</span><span class="muted" style="width:36px;text-align:right">${x.lo}°</span>
 <span class="grow" style="height:6px;border-radius:6px;background:var(--card2);position:relative"><i style="position:absolute;left:${((x.lo - lo) / Math.max(1, hi - lo)) * 100}%;right:${100 - ((x.hi - lo) / Math.max(1, hi - lo)) * 100}%;top:0;bottom:0;border-radius:6px;background:linear-gradient(90deg,#5b84ff,#b16cff)"></i></span><span style="width:36px">${x.hi}°</span></div>`).join('')}
-<div class="row" style="margin-top:10px"><a class="ask" href="#" data-ask="What should I wear in ${esc(place.name)} today?">👕 What should I wear?</a><a class="ask" href="#" data-ask="Plan a day of activities in ${esc(place.name)} based on this weather">🗺️ Plan my day</a></div>
+<div class="row" style="margin-top:10px"><a class="ask" href="#" data-ask="What should I wear in ${esc(place.name)} today?"><span class="nv-ico nv-ico-shirt" aria-hidden="true"></span>What should I wear?</a><a class="ask" href="#" data-ask="Plan a day of activities in ${esc(place.name)} based on this weather"><span class="nv-ico nv-ico-map" aria-hidden="true"></span>Plan my day</a></div>
 <p class="small muted" style="margin:8px 0 0">Live data from Open-Meteo · updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p></div>`;
 }
 

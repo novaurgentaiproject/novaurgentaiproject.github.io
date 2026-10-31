@@ -1,21 +1,58 @@
 {
   "name": "Nova AI",
   "short_name": "Nova",
+  "id": "./",
   "description": "Nova — an AI assistant with six models, image & file generation, a coding canvas, AI Mode search and interactive generated interfaces.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": [
+    "standalone"
+  ],
+  "orientation": "any",
   "background_color": "#070a1c",
   "theme_color": "#070a1c",
-  "categories": ["productivity", "utilities", "education"],
+  "categories": [
+    "productivity",
+    "utilities",
+    "education"
+  ],
   "icons": [
-    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "assets/nova-logo.svg", "sizes": "any", "type": "image/svg+xml" }
+    {
+      "src": "assets/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "assets/nova-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
   ],
   "shortcuts": [
-    { "name": "New chat", "url": "./" },
-    { "name": "Create image", "url": "./?q=Create%20an%20image%20of%20a%20violet%20nebula" }
+    {
+      "name": "New chat",
+      "url": "./"
+    },
+    {
+      "name": "Create image",
+      "url": "./?q=Create%20an%20image%20of%20a%20violet%20nebula"
+    }
   ]
 }
