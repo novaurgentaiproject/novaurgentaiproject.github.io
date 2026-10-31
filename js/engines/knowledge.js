@@ -15,7 +15,8 @@ async function getJSON(url, signal, attempt = 0) {
     });
     return getJSON(url, signal, attempt + 1);
   }
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (r.status === 429) throw new Error('The knowledge service is busy right now (rate limited). Please try again in a minute.');
+  if (!r.ok) throw new Error(`Knowledge service error (HTTP ${r.status}).`);
   const j = await r.json();
   if (cache.size > 300) cache.clear();
   cache.set(url, j);

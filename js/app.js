@@ -169,6 +169,7 @@ function setStageEmpty() {
 
 function newChat({ agentId = null, temporary = false } = {}) {
   if (S.streaming) stopGenerating();
+  if (isCanvasOpen()) closeCanvas();
   S.shared = null;
   els.shareBanner.hidden = true;
   const agent = getAgent(agentId);
@@ -195,6 +196,7 @@ function openChat(id) {
   if (S.streaming && S.streaming.chatId !== id) { /* keep generating in background */ }
   S.shared = null;
   els.shareBanner.hidden = true;
+  if (isCanvasOpen() && S.chat?.id !== id) closeCanvas();
   S.chat = c;
   S.tool = null;
   renderToolChip();

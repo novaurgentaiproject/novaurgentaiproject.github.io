@@ -181,6 +181,7 @@ async function aiModePipeline(ctx) {
   const model = getModel(msg.model);
   const q = (userMsg.content || '').trim();
   v.kind = 'aimode';
+  v.engine = engineReady() ? 'claude' : 'local';
   v.steps = [{ text: `Searching for "${truncate(q, 60)}"`, state: 'active' }];
   ctx.update();
   let sources = [];
@@ -218,6 +219,7 @@ async function researchPipeline(ctx) {
   const model = getModel(msg.model);
   const q = (userMsg.content || '').trim();
   v.kind = 'research';
+  v.engine = engineReady() ? 'claude' : 'local';
   v.steps = [{ text: 'Planning research', state: 'active' }];
   v.research = { progress: 4, label: 'Planning research…' };
   ctx.update();
@@ -280,7 +282,8 @@ async function studyPipeline(ctx) {
   const quiz = makeQuiz(art, { n: 4 + model.depth, seed: msg.versions.length - 1 });
   steps.push(`Read the Wikipedia article "${art.title}"`, `Generated ${quiz.questions.length} questions and ${quiz.cards.length} flashcards`);
   const intro = summarize(art.sections[0]?.text || page.extract, 3);
-  const ideas = summarize(art.sections.slice(1).map((s) => s.text).join(' '), 8).filter((s) => s.length > 50 && s.length < 220).slice(0, 4);
+  const seen = new Set(intro);
+  const ideas = summarize(art.sections.slice(1).map((s) => s.text).join(' '), 10).filter((s) => s.length > 50 && s.length < 220 && !seen.has(s) && seen.add(s)).slice(0, 4);
   const md = `## 📚 Let's learn: ${art.title}\n\n${intro.join(' ')}\n\n### Key ideas\n${ideas.map((s) => `- ${s}`).join('\n')}\n\n${quiz.questions.length ? `Ready to check your understanding? Answer the questions below — I'll explain each one.\n\n\`\`\`nova-quiz\n${JSON.stringify(quiz)}\n\`\`\`` : ''}\n\n*Source: [Wikipedia — ${art.title}](${art.url})*`;
   v.sources = [{ title: art.title, url: art.url, snippet: truncate(page.extract, 160), site: 'wikipedia.org', thumb: art.thumb }];
   await streamThinking(ctx, steps, model);

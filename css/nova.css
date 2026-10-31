@@ -726,16 +726,14 @@ img, svg, video, canvas { display: block; max-width: 100%; }
 .sources-row { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 14px; padding-bottom: 4px; }
 .sources-row .source-card { width: 220px; flex: none; }
 .sources-side { display: none; }
-@media (min-width: 1180px) {
-  .msg.assistant.aimode { margin-right: -280px; }
-  .msg.assistant.aimode .body { grid-template-columns: minmax(0, 1fr) 260px; }
+/* Wide AI Mode layout: answer + sticky sources column, only when the thread area has room. */
+.scroller { container-type: inline-size; container-name: thread; }
+@container thread (min-width: 1120px) {
+  .msg.assistant.aimode { margin-inline: -150px; }
+  .msg.assistant.aimode .body { grid-template-columns: minmax(0, 1fr) 270px; }
   .msg.assistant.aimode .sources-row { display: none; }
   .msg.assistant.aimode .sources-side { display: flex; grid-column: 2; grid-row: 1 / span 20; position: sticky; top: 12px; align-self: start; max-height: calc(100vh - 160px); overflow-y: auto; }
 }
-.app.canvas-open .msg.assistant.aimode { margin-right: 0; }
-.app.canvas-open .msg.assistant.aimode .body { grid-template-columns: minmax(0, 1fr); }
-.app.canvas-open .msg.assistant.aimode .sources-row { display: flex; }
-.app.canvas-open .msg.assistant.aimode .sources-side { display: none; }
 .paa { margin-top: 16px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
 .paa .paa-title { font-size: 14px; font-weight: 650; padding: 12px 14px 8px; }
 .paa details { border-top: 1px solid var(--border); }

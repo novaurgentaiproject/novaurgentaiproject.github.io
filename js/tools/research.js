@@ -1,24 +1,37 @@
 // Deep research: plan → search many sources → read → write a cited report.
-import { wikiSearch, wikiPages, wikiArticle } from '../engines/knowledge.js';
+import { wikiSearch, wikiPages, wikiArticle, wikiUrl } from '../engines/knowledge.js';
 import { summarize, sentences, extractTopic } from '../engines/local.js';
 import { truncate, titleCase, sleep } from '../util.js';
 
 export function planQueries(topic) {
-  return [topic, `${topic} history`, `${topic} how it works`, `${topic} applications and impact`, `${topic} challenges criticism`, `${topic} future research`];
+  return [topic, `${topic} history`, `${topic} how it works`, `${topic} impact and applications`, `${topic} challenges and future`];
 }
 
 export async function runResearch({ query, plan, signal, onProgress }) {
   const topic = extractTopic(query);
   const queries = plan?.length ? plan : planQueries(topic);
   const titles = [];
+  const snippets = new Map();
+  try {
+    const exact = await wikiPages([topic.charAt(0).toUpperCase() + topic.slice(1)], { signal });
+    if (exact[0] && !exact[0].disambiguation && exact[0].extract.length > 200) { titles.push(exact[0].title); snippets.set(exact[0].title, exact[0].extract); }
+  } catch (e) { if (e.name === 'AbortError') throw e; }
   for (let i = 0; i < queries.length; i++) {
     onProgress?.({ phase: 'search', query: queries[i], i, total: queries.length, found: titles.length });
-    const hits = await wikiSearch(queries[i], { limit: 4, signal }).catch(() => []);
-    hits.forEach((h) => { if (!titles.includes(h.title)) titles.push(h.title); });
-    await sleep(120, signal);
+    const hits = await wikiSearch(queries[i], { limit: 4, signal }).catch((e) => { if (e.name === 'AbortError') throw e; return []; });
+    hits.forEach((h) => { if (!titles.includes(h.title)) { titles.push(h.title); snippets.set(h.title, h.snippet); } });
+    await sleep(250, signal);
   }
+  if (!titles.length) throw new Error('No sources could be reached for this topic right now. Please try again in a minute.');
   onProgress?.({ phase: 'read', found: titles.length });
-  const pages = (await wikiPages(titles.slice(0, 16), { signal })).filter((p) => !p.disambiguation && p.extract.length > 120).slice(0, 10);
+  let pages;
+  try {
+    pages = (await wikiPages(titles.slice(0, 16), { signal })).filter((p) => !p.disambiguation && p.extract.length > 120).slice(0, 10);
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    // Fall back to search snippets so the report can still be written.
+    pages = titles.slice(0, 8).map((t) => ({ title: t, url: wikiUrl(t), extract: snippets.get(t) || t, thumb: null }));
+  }
   const main = pages[0] ? await wikiArticle(pages[0].title, { signal }).catch(() => null) : null;
   const deep = [];
   for (const p of pages.slice(1, 3)) { const a = await wikiArticle(p.title, { signal }).catch(() => null); if (a) deep.push(a); }

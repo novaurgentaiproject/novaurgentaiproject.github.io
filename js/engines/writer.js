@@ -175,11 +175,13 @@ export function email(text, { name = '' } = {}) {
   const to = (/\bto (?:my |our |the )?([a-z]+(?: [a-z]+)?)\b/i.exec(text)?.[1] || 'there').replace(/\b(about|asking|regarding|for)\b.*$/, '').trim();
   const about = (/\b(?:about|regarding|for|asking (?:for|about)?)\s+(.+)$/i.exec(text)?.[1] || 'the matter we discussed').replace(/[.?!]$/, '');
   const sign = name || '[Your name]';
-  const greet = /boss|manager|professor|client|team|hr|recruiter|landlord|customer/.test(to) ? `Dear ${capitalize(to)}` : `Hi ${capitalize(to)}`;
+  const formal = /boss|manager|professor|client|team|hr|recruiter|landlord|customer|teacher|supervisor/.test(to);
+  const greet = /boss|manager|supervisor/.test(to) ? 'Dear [Manager\'s name]' : formal ? `Dear ${capitalize(to)}` : to === 'there' ? 'Hi there' : `Hi ${capitalize(to)}`;
   let subject, body;
   if (/sick|leave|day off|absence|vacation|time off/.test(t)) {
-    subject = `Time off request — ${about}`;
-    body = `I hope you're doing well. I'm writing to request time off regarding ${about}. I'll make sure my current work is covered and up to date before then, and I'm happy to coordinate a handover with the team.\n\nPlease let me know if this works or if you need any additional information.`;
+    const what = /\b(a day off|days? off|time off|leave|vacation|sick day)\b/i.exec(about)?.[0] || 'time off';
+    subject = `Time off request`;
+    body = `I hope you're doing well. I'd like to request ${what.toLowerCase()} on [date(s)]${/sick/.test(t) ? ', as I\'m not feeling well' : ''}. I'll make sure my current work is covered and up to date beforehand, and I'm happy to coordinate a handover with the team.\n\nPlease let me know if this works, or if you need any additional information.`;
   } else if (/sorry|apolog/.test(t)) {
     subject = `My apologies — ${about}`;
     body = `I want to sincerely apologize for ${about}. That wasn't the standard I hold myself to, and I understand the inconvenience it caused.\n\nTo make things right, I've already taken steps to make sure it doesn't happen again. I really appreciate your patience and understanding.`;

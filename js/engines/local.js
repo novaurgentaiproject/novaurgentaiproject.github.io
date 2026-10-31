@@ -95,7 +95,8 @@ function memoryIntent(t) {
     const fact = m[1].replace(/[.!]+$/, '').replace(/^my\b/i, 'My').replace(/^i\b/i, 'I');
     if (!settings.memoryEnabled) return 'Memory is turned off. You can enable it in **Settings → Personalization**.';
     addMemory(capitalize(fact));
-    return `Got it — I'll remember that **${fact}**. ✦\n\n\`\`\`nova-memory\n${capitalize(fact)}\n\`\`\``;
+    const echo = fact.replace(/\bI'm\b/gi, "you're").replace(/\bI am\b/gi, 'you are').replace(/\bI\b/g, 'you').replace(/\bmy\b/gi, 'your').replace(/\bme\b/gi, 'you').replace(/\bmine\b/gi, 'yours');
+    return `Got it — I'll remember that **${echo}**. ✦\n\n\`\`\`nova-memory\n${capitalize(fact)}\n\`\`\``;
   }
   if (/what do you (remember|know) about me|what('?s| is) in your memory|show (me )?(your )?memor/i.test(t)) {
     if (!memory.length) return "I don't have any memories saved yet. Tell me something like *\"Remember that I prefer Python\"* and I'll keep it in mind.";
@@ -205,7 +206,7 @@ function parseDate(s) {
 }
 
 function widgetIntent(t) {
-  if (!/\b(make|build|create|give|show|open|launch|start|set|need|want|generate)\b.*\b(me\s+)?(an?\s+|the\s+)?/i.test(t) && !/^(a |an )?[\w\s-]{0,30}(calculator|timer|stopwatch|converter|generator|planner|tracker|game|simulator|simulation|clock|quiz)\s*$/i.test(t)) return null;
+  if (!/\b(make|build|create|give|show|open|launch|start|set|need|want|generate|play|let'?s|lets|use)\b/i.test(t) && !/^(a |an )?[\w\s-]{0,30}(calculator|timer|stopwatch|converter|generator|planner|tracker|game|simulator|simulation|clock|quiz|tic.?tac.?toe|piano|synth)\s*$/i.test(t)) return null;
   if (detectLang(t) && !/\b(interactive|widget)\b/i.test(t)) return null;
   if (FILE_RE.test(t)) return null;
   const w = matchWidget(t);
@@ -254,13 +255,13 @@ async function writingIntent(t, depth, seed) {
   if (WRITING.joke.test(t)) return { md: joke(cleanTopic(t, 'jokes?|pun'), seed), steps: ['Picked a joke'] };
   if (WRITING.email.test(t)) return { md: email(t, { name: settings.name }), steps: ['Detected an email/letter request', 'Chose a tone and structure based on its purpose'] };
   if (WRITING.names.test(t)) {
-    const topic = cleanTopic(t, 'names? for|name ideas for|business names? for|brand names? for|team names? for');
-    const list = names(topic, depth >= 2 ? 12 : 8, seed);
+    const topic = cleanTopic(t.replace(/\b\d{1,2}\s+/, ''), 'names? for|name ideas for|business names? for|brand names? for|team names? for');
+    const list = names(topic, Math.min(20, parseInt(/\b(\d{1,2})\s+(?:\w+\s+)?names?\b/i.exec(t)?.[1], 10) || (depth >= 2 ? 12 : 8)), seed);
     return { md: `Here are some name ideas for **${topic}**:\n\n${list.map((n, i) => `${i + 1}. **${n}**`).join('\n')}\n\nWant a different vibe — playful, premium, techy or classic?`, steps: ['Generated name combinations'] };
   }
   if (WRITING.ideas.test(t)) {
-    const topic = cleanTopic(t, 'ideas?|brainstorm|suggestions?|things to do');
-    const list = ideas(topic, depth >= 2 ? 10 : 6, seed);
+    const topic = cleanTopic(t.replace(/\b\d{1,2}\s+/, ''), 'ideas?|brainstorm|suggestions?|things to do');
+    const list = ideas(topic, Math.min(10, parseInt(/\b(\d{1,2})\s+(?:\w+\s+)?(?:ideas?|suggestions?|things)\b/i.exec(t)?.[1], 10) || (depth >= 2 ? 10 : 6)), seed);
     return { md: `Here are some ideas for **${topic}**:\n\n${list.map((n, i) => `${i + 1}. ${n}`).join('\n')}`, steps: ['Brainstormed ideas'] };
   }
   return null;
