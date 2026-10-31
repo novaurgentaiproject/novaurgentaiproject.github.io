@@ -1,7 +1,7 @@
 // Nova — main application controller.
 import { $, $$, esc, h, uid, throttleRaf, copyText, download, dataURLtoBlob, relDay, truncate, capitalize, onKey, isMac, inflate, b64urlToBytes, sleep } from './util.js';
 import { icon, hydrateIcons } from './icons.js';
-import { settings, saveSettings, chats, loadChats, saveChat, deleteChat, newChat as makeChat, on, engineReady, addMemory } from './state.js';
+import { settings, saveSettings, chats, loadChats, saveChat, deleteChat, newChat as makeChat, on, engineReady, addMemory, savedWidgets, persistWidgets, widgetState, setWidgetState } from './state.js';
 import { MODELS, getModel, modelGradient } from './models.js';
 import { codeRegistry } from './markdown.js';
 import { messageEl, updateAssistant, patchImages, blocks, uiFrames, ensureImage, TOOLS } from './render.js';
@@ -9,7 +9,7 @@ import { wrapUI } from './tools/genui.js';
 import { respond } from './engines/index.js';
 import { claudeComplete } from './engines/claude.js';
 import { openMenu, closeMenu, toast, confirmDialog, promptDialog, lightbox, topModal } from './ui.js';
-import { openSettings, openSearch, openLibrary, openAgents, openShortcuts, openShare, exportChat, previewFile, previewUI, openCamera, chatToMarkdown } from './modals.js';
+import { openSettings, openSearch, openLibrary, openAgents, openShortcuts, openShare, exportChat, previewFile, previewUI, openCamera, chatToMarkdown, openWidgets } from './modals.js';
 import { allAgents, getAgent } from './agents.js';
 import { readAttachment, buildFile, describeAttachment, fileBadge } from './tools/files.js';
 import { cleanImagePrompt } from './tools/imagegen.js';
@@ -750,6 +750,22 @@ const ACTIONS = {
   'search-chats': () => openSearch(api),
   'open-library': () => openLibrary(api),
   'open-agents': () => openAgents(api),
+  'open-widgets': () => openWidgets(api),
+  'ui-save': (el) => {
+    const blockId = el.dataset.block;
+    const b = blocks.get(blockId);
+    if (!b) return;
+    let w = savedWidgets.find((x) => x.source === blockId);
+    if (!w) {
+      w = { id: uid('wg'), title: b.title, spec: b.spec || null, html: b.spec ? null : b.html, source: blockId, createdAt: Date.now() };
+      savedWidgets.unshift(w);
+      persistWidgets();
+      const st = widgetState(blockId);
+      if (st) setWidgetState('saved:' + w.id, st);
+    }
+    el.classList.add('active');
+    toast(`Saved “${w.title}” to My Widgets`, { action: { label: 'Open', onClick: () => openWidgets(api, w.id) } });
+  },
   'open-settings': (el) => openSettings(api, el.dataset.tab || 'general'),
   'profile-menu': (el) => profileMenu(el),
   'share-chat': () => S.chat && openShare(api, S.chat),
@@ -907,6 +923,8 @@ window.addEventListener('message', (e) => {
   if (d.type === 'nova-ui-size') {
     if (frame.closest('.ui-card')?.classList.contains('fullscreen')) return;
     frame.style.height = Math.max(120, Math.min(1400, +d.height || 0)) + 'px';
+  } else if (d.type === 'nova-ui-state' && d.state && typeof d.state === 'object') {
+    setWidgetState(frame.dataset.stateKey || d.id, d.state);
   } else if (d.type === 'nova-ui-ask' && typeof d.text === 'string') {
     send(d.text.slice(0, 2000));
   } else if (d.type === 'nova-ui-open' && /^https?:\/\//.test(d.url || '')) {

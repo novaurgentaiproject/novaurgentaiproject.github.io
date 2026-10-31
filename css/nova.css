@@ -1075,3 +1075,19 @@ html.standalone .editor pre, html.standalone .editor textarea, html.standalone .
   html.standalone .modal-backdrop { padding: env(safe-area-inset-top) 0 0; }
   html.standalone .modal { padding-bottom: env(safe-area-inset-bottom); }
 }
+
+/* ---------- My Widgets ---------- */
+.widget-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.widget-tile {
+  display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; text-align: left;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.widget-tile:hover { border-color: var(--border-strong); background: var(--hover); transform: translateY(-1px); }
+.widget-tile .wt-body { flex: 1; min-width: 0; }
+.widget-tile b { display: block; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.widget-tile small { color: var(--text-3); font-size: 12.5px; }
+.widget-tile .icon-btn { opacity: .6; }
+.widget-tile:hover .icon-btn { opacity: 1; }
+.widget-viewer .modal-body { padding: 0; }
+.widget-frame { display: block; width: 100%; height: 480px; border: 0; background: transparent; }
+.ui-card .card-head .icon-btn.active { color: var(--accent-text); background: var(--active); }

@@ -4,8 +4,9 @@ import { esc, hash, formatBytes, truncate } from './util.js';
 import { icon } from './icons.js';
 import { renderMarkdown } from './markdown.js';
 import { getModel } from './models.js';
-import { settings, emit } from './state.js';
+import { settings, emit, widgetState, setWidgetState } from './state.js';
 import { wrapUI, buildWidget, upgradeLegacyUI } from './tools/genui.js';
+import { specToHTML, normalizeSpec } from './tools/widgetkit.js';
 import { generateImage, ASPECTS } from './tools/imagegen.js';
 import { fileBadge, fileKindLabel, describeAttachment } from './tools/files.js';
 
@@ -75,12 +76,51 @@ function uiBlock(ctx, body, { closed, attrs, index, streaming }) {
   }
   const id = 'u' + hash(ctx.msg.id + ':' + ctx.vi + ':' + index).toString(36);
   blocks.set(id, { type: 'ui', title, html });
-  return `<div class="card ui-card" data-ui="${id}"><div class="card-head"><div class="title">${icon('layout', 'icon-sm')}<span>${esc(title)}</span></div><div class="tools">
+  return uiCardHTML(id, title, 'layout');
+}
+
+function uiCardHTML(id, title, ic) {
+  return `<div class="card ui-card" data-ui="${id}"><div class="card-head"><div class="title">${icon(ic, 'icon-sm')}<span>${esc(title)}</span></div><div class="tools">
+<button class="icon-btn" data-action="ui-save" data-block="${id}" title="Save to My Widgets">${icon('bookmark', 'icon-sm')}</button>
 <button class="icon-btn" data-action="ui-code" data-block="${id}" title="View code">${icon('code', 'icon-sm')}</button>
 <button class="icon-btn" data-action="ui-download" data-block="${id}" title="Download HTML">${icon('download', 'icon-sm')}</button>
 <button class="icon-btn" data-action="ui-reload" data-block="${id}" title="Reload">${icon('refresh', 'icon-sm')}</button>
 <button class="icon-btn" data-action="ui-fullscreen" data-block="${id}" title="Full screen">${icon('maximize', 'icon-sm')}</button></div></div>
 <iframe data-hydrate="ui" data-block="${id}" title="${esc(title)}" sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-pointer-lock" allow="clipboard-write; autoplay"></iframe></div>`;
+}
+
+const WIDGET_FENCE = /```nova-widget[^\n]*\n([\s\S]*?)```/g;
+
+// Find the previous widget in this chat that shares component ids, so a revised
+// widget keeps the data the user already entered.
+function previousWidgetKey(ctx, spec) {
+  const ids = new Set(spec.components.map((c) => c.id).filter(Boolean));
+  const msgs = ctx.chat.messages;
+  for (let i = msgs.indexOf(ctx.msg) - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== 'assistant') continue;
+    const vi = m.active ?? 0;
+    const found = [...(m.versions[vi]?.content || '').matchAll(WIDGET_FENCE)];
+    for (let k = found.length - 1; k >= 0; k--) {
+      let prev;
+      try { prev = JSON.parse(found[k][1]); } catch { continue; }
+      if ((prev.components || []).some((c) => c.id && ids.has(c.id))) return 'w' + hash(m.id + ':' + vi + ':' + k).toString(36);
+    }
+  }
+  return null;
+}
+
+function widgetBlock(ctx, body, { closed, index, streaming }) {
+  if (!closed || streaming) {
+    return `<div class="card ui-card"><div class="card-head"><div class="title">${icon('grid', 'icon-sm')}<span>Widget</span></div></div><div class="building"><span>${icon('sparkles', 'icon-sm spin')} Designing widget…</span></div></div>`;
+  }
+  let raw;
+  try { raw = JSON.parse(body); } catch { return null; }
+  const spec = normalizeSpec(raw);
+  if (!spec) return null;
+  const id = 'w' + hash(ctx.msg.id + ':' + ctx.vi + ':' + index).toString(36);
+  blocks.set(id, { type: 'ui', kind: 'widget', title: spec.title, spec, html: specToHTML(spec), inherit: spec.inherit || previousWidgetKey(ctx, spec) });
+  return uiCardHTML(id, spec.title, 'grid');
 }
 
 const CHART_COLORS = ['#5b84ff', '#a77bff', '#3b6bff', '#c084fc', '#22d3ee', '#f472b6', '#4ade9b', '#ffc861'];
@@ -208,6 +248,7 @@ function fenceRenderer(ctx) {
       case 'nova-image': return imageBlock(ctx, body, opts);
       case 'nova-file': return fileBlock(ctx, body, opts);
       case 'nova-ui': return uiBlock(ctx, body, opts);
+      case 'nova-widget': return widgetBlock(ctx, body, opts);
       case 'nova-chart': return chartBlock(ctx, body, opts);
       case 'nova-quiz': return quizBlock(ctx, body, opts);
       case 'nova-memory': return memoryBlock();
@@ -383,8 +424,9 @@ function hydrate(root, ctx) {
     const id = frame.dataset.block;
     const b = blocks.get(id);
     if (!b) return;
-    uiFrames.set(id, frame);
-    frame.srcdoc = wrapUI(b.html, id, document.documentElement.dataset.theme || 'dark');
+    let state = widgetState(id);
+    if (!state && b.inherit) { state = widgetState(b.inherit); if (state) setWidgetState(id, state); }
+    mountFrame(frame, { html: b.html, id, stateKey: id, state });
   });
   root.querySelectorAll('[data-hydrate="quiz"]').forEach((el) => {
     const b = blocks.get(el.dataset.block);
@@ -394,6 +436,13 @@ function hydrate(root, ctx) {
     const b = blocks.get(el.dataset.block);
     if (b) ensureImage(ctx.chat, b);
   });
+}
+
+/** Load an interface into a frame with its saved data, and register it for messages. */
+export function mountFrame(frame, { html, id, stateKey, state = widgetState(stateKey) }) {
+  frame.dataset.stateKey = stateKey;
+  uiFrames.set(id, frame);
+  frame.srcdoc = wrapUI(html, id, document.documentElement.dataset.theme || 'dark', state);
 }
 
 export function ensureImage(chat, b, { force = false, seedBump = 0 } = {}) {

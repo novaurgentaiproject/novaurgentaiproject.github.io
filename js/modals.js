@@ -2,8 +2,8 @@
 // file preview and camera capture.
 import { esc, h, download, copyText, relDay, truncate, uid, deflate, bytesToB64url, formatBytes, fileExt, isMac } from './util.js';
 import { icon, hydrateIcons } from './icons.js';
-import { openModal, toast, confirmDialog, lightbox } from './ui.js';
-import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS } from './state.js';
+import { openModal, toast, confirmDialog, lightbox, promptDialog } from './ui.js';
+import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS, savedWidgets, persistWidgets, removeWidgetState } from './state.js';
 import { MODELS, CLAUDE_MODELS, EFFORTS, modelGradient } from './models.js';
 import { testKey } from './engines/claude.js';
 import { listVoices, speak, canSpeak } from './tools/voice.js';
@@ -12,6 +12,8 @@ import { renderMarkdown } from './markdown.js';
 import { highlight } from './highlight.js';
 import { buildFile, parseCSV, fileKindLabel } from './tools/files.js';
 import { wrapUI } from './tools/genui.js';
+import { specToHTML, WIDGET_CSS } from './tools/widgetkit.js';
+import { mountFrame } from './render.js';
 
 const switchHTML = (key, on) => `<label class="switch"><input type="checkbox" data-set="${key}"${on ? ' checked' : ''}><span></span></label>`;
 
@@ -445,3 +447,77 @@ export function openCamera() {
 }
 
 export { truncate, allAgents };
+
+// ---------------------------------------------------------------------------
+// My Widgets
+// ---------------------------------------------------------------------------
+let iconCSS = false;
+function ensureWidgetIcons() {
+  if (iconCSS) return;
+  iconCSS = true;
+  const st = document.createElement('style');
+  st.textContent = WIDGET_CSS.slice(WIDGET_CSS.indexOf('/* CSS-drawn icons */'));
+  document.head.appendChild(st);
+}
+
+const WIDGET_IDEAS = [
+  'Make a widget that tracks how much water I drink',
+  'Make a packing list widget for my trip',
+  'Make a countdown to Christmas',
+  'Make a 7 minute tea timer',
+  'Make a scoreboard for Alex and Sam',
+  'Make a study dashboard',
+];
+
+export function openWidgets(app, openId = null) {
+  ensureWidgetIcons();
+  const m = openModal({ title: 'My Widgets', size: 'wide', body: '' });
+  const draw = () => {
+    if (!savedWidgets.length) {
+      m.body.innerHTML = `<div class="empty-state"><div class="big-ico">${icon('grid', 'icon-lg')}</div><b>No saved widgets yet</b><p>Ask Nova to make one — trackers, calculators, checklists, timers, countdowns, dashboards… Then tap ${icon('bookmark', 'icon-sm')} on it to keep it here.</p>
+<div class="inline" style="justify-content:center;margin-top:12px">${WIDGET_IDEAS.map((t) => `<button class="suggest-chip" data-idea="${esc(t)}">${esc(t.replace(/^Make (a |an )?/, ''))}</button>`).join('')}</div></div>`;
+      m.body.querySelectorAll('[data-idea]').forEach((b) => (b.onclick = () => { m.close(); app.newChat(); app.send(b.dataset.idea); }));
+      return;
+    }
+    m.body.innerHTML = `<p>Widgets you've saved. Their data is stored on this device.</p><div class="widget-grid">${savedWidgets.map((w) => `<div class="widget-tile" role="button" tabindex="0" data-id="${esc(w.id)}"><span class="wi wi-${esc(w.spec?.icon || 'spark')}"></span><span class="wt-body"><b>${esc(w.title)}</b><small>${w.spec ? `${w.spec.components.length} parts` : 'Interface'} · ${new Date(w.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</small></span><button class="icon-btn" data-del="${esc(w.id)}" title="Delete">${icon('trash', 'icon-sm')}</button></div>`).join('')}</div>
+<div style="margin-top:16px"><button class="btn sm" data-new>${icon('plus', 'icon-sm')} Make a new widget</button></div>`;
+    m.body.querySelectorAll('.widget-tile').forEach((el) => {
+      el.onclick = (e) => { if (!e.target.closest('[data-del]')) openWidgetViewer(app, savedWidgets.find((w) => w.id === el.dataset.id), draw); };
+      el.onkeydown = (e) => { if (e.key === 'Enter') el.click(); };
+    });
+    m.body.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      const w = savedWidgets.find((x) => x.id === b.dataset.del);
+      if (!w || !(await confirmDialog({ title: 'Delete widget?', text: `“${esc(w.title)}” and its saved data will be removed.`, confirm: 'Delete', danger: true }))) return;
+      savedWidgets.splice(savedWidgets.indexOf(w), 1);
+      removeWidgetState('saved:' + w.id);
+      persistWidgets();
+      draw();
+    }));
+    m.body.querySelector('[data-new]').onclick = () => { m.close(); app.newChat(); app.setTool('dynamic'); };
+  };
+  draw();
+  if (openId) { const w = savedWidgets.find((x) => x.id === openId); if (w) openWidgetViewer(app, w, draw); }
+}
+
+function openWidgetViewer(app, w, onChange) {
+  if (!w) return;
+  const html = w.spec ? specToHTML(w.spec) : w.html;
+  const m = openModal({
+    size: 'wide', className: 'widget-viewer',
+    headExtra: `<div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1"><span class="wi wi-${esc(w.spec?.icon || 'spark')}" style="width:30px;height:30px;border-radius:9px;transform:scale(.8)"></span><h2 style="margin:0;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.title)}</h2></div>
+<button class="icon-btn" data-rename title="Rename">${icon('pencil', 'icon-sm')}</button><button class="icon-btn" data-dl title="Download">${icon('download', 'icon-sm')}</button>`,
+    body: '<iframe class="widget-frame" sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-pointer-lock" title="Widget"></iframe>',
+  });
+  mountFrame(m.body.querySelector('iframe'), { html, id: 'saved-' + w.id, stateKey: 'saved:' + w.id });
+  m.el.querySelector('[data-rename]').onclick = async () => {
+    const t = await promptDialog({ title: 'Rename widget', value: w.title });
+    if (!t?.trim()) return;
+    w.title = t.trim();
+    if (w.spec) w.spec.title = w.title;
+    persistWidgets();
+    m.el.querySelector('h2').textContent = w.title;
+    onChange?.();
+  };
+  m.el.querySelector('[data-dl]').onclick = () => download(`${w.title.replace(/[^\w-]+/g, '-').toLowerCase()}.html`, wrapUI(html, 'export', document.documentElement.dataset.theme), 'text/html');
+}

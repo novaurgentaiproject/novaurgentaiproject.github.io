@@ -35,14 +35,17 @@ table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{padding:7px 8px
 `;
 
 const BRIDGE = `(function(){var id="__ID__";var last=0;function post(){var h=Math.ceil(Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0));if(Math.abs(h-last)>2){last=h;parent.postMessage({type:"nova-ui-size",id:id,height:h},"*")}}
-window.nova={ask:function(t){parent.postMessage({type:"nova-ui-ask",id:id,text:String(t)},"*")},resize:post,open:function(u){parent.postMessage({type:"nova-ui-open",id:id,url:String(u)},"*")}};
+var NS=window.__NOVA_STATE__||{};var st;function persist(){clearTimeout(st);st=setTimeout(function(){try{parent.postMessage({type:"nova-ui-state",id:id,state:NS},"*")}catch(e){}},200)}
+window.nova={ask:function(t){parent.postMessage({type:"nova-ui-ask",id:id,text:String(t)},"*")},resize:post,open:function(u){parent.postMessage({type:"nova-ui-open",id:id,url:String(u)},"*")},
+state:NS,save:function(part){if(part&&typeof part==="object"){for(var k in part)NS[k]=part[k]}persist()}};
 addEventListener("load",post);try{new ResizeObserver(post).observe(document.documentElement)}catch(e){setInterval(post,500)}setTimeout(post,60);
 document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("[data-ask]");if(a){e.preventDefault();nova.ask(a.getAttribute("data-ask"));return}var l=e.target.closest&&e.target.closest("a[href]");if(l&&/^https?:/.test(l.href)){e.preventDefault();nova.open(l.href)}});
-try{window.localStorage}catch(e){var m={};Object.defineProperty(window,"localStorage",{value:{getItem:function(k){return k in m?m[k]:null},setItem:function(k,v){m[k]=String(v)},removeItem:function(k){delete m[k]},clear:function(){m={}}}})}
+try{window.localStorage}catch(e){var m=NS.ls||{};NS.ls=m;var api={getItem:function(k){return Object.prototype.hasOwnProperty.call(m,k)?m[k]:null},setItem:function(k,v){m[k]=String(v);persist()},removeItem:function(k){delete m[k];persist()},clear:function(){for(var k in m)delete m[k];persist()},key:function(i){return Object.keys(m)[i]||null}};Object.defineProperty(api,"length",{get:function(){return Object.keys(m).length}});Object.defineProperty(window,"localStorage",{value:api})}
 })();`;
 
-export function wrapUI(html, id, theme = 'dark') {
-  const bridge = `<script>${BRIDGE.replace('__ID__', id)}<\/script>`;
+export function wrapUI(html, id, theme = 'dark', state = null) {
+  const init = state ? `window.__NOVA_STATE__=${JSON.stringify(state).replace(/</g, '\\u003c')};` : '';
+  const bridge = `<script>${init}${BRIDGE.replace('__ID__', id)}<\/script>`;
   if (/<html[\s>]|<!doctype/i.test(html)) {
     let doc = html;
     if (/<head[^>]*>/i.test(doc)) doc = doc.replace(/<head([^>]*)>/i, `<head$1>${bridge}`);

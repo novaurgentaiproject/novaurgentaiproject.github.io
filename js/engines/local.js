@@ -10,6 +10,7 @@ import { poem, haiku, story, joke, email, ideas, names, cleanTopic } from './wri
 import { generateCode, detectLang, codeScaffold } from './codegen.js';
 import { matchWidget, weatherWidget } from '../tools/genui.js';
 import { describeAttachment } from '../tools/files.js';
+import { isWidgetRequest, isWidgetEdit, pickWidget, editWidget, topicWidget } from '../tools/widgetgen.js';
 
 const STOP = new Set('a an the and or but if then else of to in on at by for with about as into like through over after before between under from up down out off is are was were be been being have has had do does did can could should would will shall may might must i me my we our you your he she it its they them their this that these those what which who whom whose when where why how not no yes so than too very just also please tell explain describe give show make write create'.split(' '));
 
@@ -80,7 +81,7 @@ function smalltalk(t, model) {
     return `I'm **${model.name}** — part of the **Nova** family of AI models. ${model.tagline}\n\n**The Nova lineup**\n${MODELS.map((m) => `- **${m.name}** — ${m.tagline}`).join('\n')}\n\nYou can switch models anytime from the menu at the top. I'm currently running on the **${settings.engine === 'claude' && settings.anthropicKey ? 'Claude-powered engine' : 'on-device engine'}**.`;
   }
   if (/what can you do|what are your (features|capabilities)|^help$|how do (i|you) use (you|nova|this)/i.test(t)) {
-    return `Here's what Nova can do:\n\n| | Feature | Try saying |\n|---|---|---|\n| 💬 | Answers with sources | *"What is a black hole?"* |\n| 🔎 | **AI Mode** search (Google-style with sources) | Pick **AI Mode** from the **+** menu |\n| 🧩 | **Dynamic View** — interactive interfaces | *"Build me a mortgage calculator"* |\n| 🖼️ | Image generation | *"Create an image of a violet nebula over mountains"* |\n| 💻 | Coding + live **Canvas** to run HTML/JS/Python | *"Write a Python fibonacci function"* |\n| 📄 | Files: PDF, Word, Excel, CSV, Markdown… | *"Make a PDF about the solar system"* |\n| 🎙️ | Voice: dictation, voice messages, voice mode | Tap the 🎙️ or waveform button |\n| 📎 | Attach images, videos, audio & documents | Use **+** or drag and drop |\n| 🔭 | Deep research reports | Pick **Deep research** from **+** |\n| 📚 | Study mode: quizzes & flashcards | *"Quiz me on photosynthesis"* |\n\nConnect Claude in **Settings → Engine** to unlock full reasoning across all six Nova models.`;
+    return `Here's what Nova can do:\n\n| | Feature | Try saying |\n|---|---|---|\n| 💬 | Answers with sources | *"What is a black hole?"* |\n| 🔎 | **AI Mode** search (Google-style with sources) | Pick **AI Mode** from the **+** menu |\n| 🧩 | **Dynamic View** — interactive interfaces | *"Build me a mortgage calculator"* |\n| 🛠️ | **Widget Studio** — Nova designs custom widgets that save your data | *"Make a widget that tracks my water"* |\n| 🖼️ | Image generation | *"Create an image of a violet nebula over mountains"* |\n| 💻 | Coding + live **Canvas** to run HTML/JS/Python | *"Write a Python fibonacci function"* |\n| 📄 | Files: PDF, Word, Excel, CSV, Markdown… | *"Make a PDF about the solar system"* |\n| 🎙️ | Voice: dictation, voice messages, voice mode | Tap the 🎙️ or waveform button |\n| 📎 | Attach images, videos, audio & documents | Use **+** or drag and drop |\n| 🔭 | Deep research reports | Pick **Deep research** from **+** |\n| 📚 | Study mode: quizzes & flashcards | *"Quiz me on photosynthesis"* |\n\nConnect Claude in **Settings → Engine** to unlock full reasoning across all six Nova models.`;
   }
   if (/who (made|created|built|developed) you|who is your (creator|developer)/i.test(t)) return `I was built as part of the **Nova Urgent AI Project** ✦ — an AI interface with six models, from the instant **Nova 1 Flash** to the flagship **Nova 3 Martia**.`;
   if (/\b(i'?m|i am|feeling) (so )?(sad|down|depressed|lonely|stressed|anxious|overwhelmed|upset|tired)\b/i.test(t)) {
@@ -124,7 +125,7 @@ function mathIntent(t) {
     return { md: `**Solving** \`${r.expr}\`\n\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n**${r.variable} = ${fmt(r.value)}**`, steps: ['Detected a linear equation', ...steps] };
   }
   const val = fmt(r.value) + (r.unit || '');
-  return { md: steps.length ? `${steps.map((s) => `- ${s}`).join('\n')}\n\n**= ${val}**` : `\`${r.expr.replace(/\*/g, '×')}\` = **${val}**`, steps: ['Parsed arithmetic expression', `Evaluated: ${r.expr} → ${val}`] };
+  return { md: steps.length ? `${steps.map((s) => `- ${s}`).join('\n')}\n\n**= ${val}**` : `\`${r.expr.replace(/\*/g, '×')}\` = **${val}**`, steps: ['Parsed arithmetic expression', `Evaluated: ${r.expr} → ${val}`], followups: r.kind === 'percent' ? ['Make a percentage calculator widget'] : undefined };
 }
 
 async function conversionIntent(t, signal) {
@@ -139,6 +140,7 @@ async function conversionIntent(t, signal) {
       return {
         md: `**${fmt(q.value)} ${from} = ${fmt(q.value * rate, 6)} ${to}**\n\n1 ${from} = ${fmt(rate, 6)} ${to} · 1 ${to} = ${fmt(1 / rate, 6)} ${from}\n\n*European Central Bank reference rate for ${date} via Frankfurter. Banks and card providers add their own margins.*`,
         steps: [`Detected currency conversion ${from} → ${to}`, 'Fetched the latest ECB reference rate'],
+        followups: [`Make a ${from} to ${to} converter widget`],
         sources: [{ title: `Exchange rate ${from}/${to}`, url: 'https://www.frankfurter.app/', snippet: `ECB reference rate on ${date}`, site: 'frankfurter.app' }],
       };
     } catch { return { md: `I couldn't fetch live exchange rates right now. Please try again in a moment.` }; }
@@ -149,6 +151,7 @@ async function conversionIntent(t, signal) {
   return {
     md: q.inverse ? `There are **${fmt(c.result)} ${label(q.to)}** in 1 ${label(q.from)}.` : `**${fmt(q.value)} ${label(q.from)} = ${fmt(c.result)} ${label(q.to)}**`,
     steps: [`Detected ${c.category} conversion`, `${q.value} ${q.from} → ${q.to}`],
+    followups: [`Make a ${q.from} to ${q.to} converter widget`],
   };
 }
 
@@ -468,6 +471,67 @@ async function attachmentAnswer(t, atts, depth) {
 }
 
 // ---------------------------------------------------------------------------
+// Widget Studio
+// ---------------------------------------------------------------------------
+function lastWidgetSpec(history) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'assistant') continue;
+    const all = [...(m.text || '').matchAll(/```nova-widget[^\n]*\n([\s\S]*?)```/g)];
+    if (all.length) { try { return JSON.parse(all[all.length - 1][1]); } catch { return null; } }
+    if (i < history.length - 4) break;
+  }
+  return null;
+}
+
+function editHint(spec) {
+  const types = spec.components.map((c) => c.type);
+  if (types.includes('counter')) return 'make the goal 10';
+  if (types.includes('checklist')) return 'add sunscreen and a hat';
+  if (types.includes('random')) return 'add Thai and Greek';
+  return 'add a timer';
+}
+
+export function widgetReply(spec, { notes = [], change = null } = {}) {
+  const parts = spec.components.map((c) => c.type).filter((v, i, a) => a.indexOf(v) === i);
+  const md = `${change ? `${change} — here's your updated widget. Anything you already entered carries over.` : `I designed a **${spec.title}** widget for you ✦ It saves your data automatically on this device.`}
+
+\`\`\`nova-widget
+${JSON.stringify(spec)}
+\`\`\`
+${notes.length ? `\n**What's inside**\n${notes.map((n) => `- ${n}`).join('\n')}\n` : ''}
+Want changes? Just say something like *"${editHint(spec)}"*, *"rename it"* or *"add a notes section"*. Tap the bookmark on the widget to keep it in **My Widgets**.`;
+  return { md, steps: [change ? 'Understood an edit to the last widget' : 'Recognized a widget request', `Composed it from building blocks: ${parts.join(', ')}`, 'Wired up live formulas and saved data'] };
+}
+
+const WIDGET_IDEAS = ['Make a widget that tracks how much water I drink', 'Make a packing list widget for my trip', 'Make a countdown to Christmas', 'Make a 7 minute tea timer', 'Make a scoreboard for Alex and Sam', 'Make a study dashboard'];
+
+async function widgetStudio(t, history, signal) {
+  const prev = lastWidgetSpec(history);
+  if (prev && isWidgetEdit(t)) {
+    const ed = editWidget(prev, t);
+    if (ed) return widgetReply(ed.spec, { change: ed.change });
+  }
+  if (!isWidgetRequest(t) || detectLang(t) || FILE_RE.test(t)) return null;
+  const pickd = await pickWidget(t, { signal });
+  if (pickd?.kind === 'spec') return widgetReply(pickd.spec, { notes: pickd.notes });
+  if (pickd?.kind === 'builtin') {
+    const w = pickd.widget;
+    return { md: `Here's an interactive **${w.title.toLowerCase()}** — try it right here:\n\n\`\`\`nova-ui title="${w.title}" widget="${w.id}"\n\n\`\`\``, steps: ['Detected a request for an interactive tool', `Built the "${w.title}" interface`] };
+  }
+  const topic = /\b(?:about|on|for|of|explaining|showing)\s+(?:the\s+)?([a-z][\w '-]{2,40}?)[.?!]?$/i.exec(t)?.[1];
+  if (topic && !/^(me|my|it|this|that)$/i.test(topic)) {
+    const tw = await topicWidget(topic, signal).catch(() => null);
+    if (tw) return { md: `Here's an interactive widget about **${tw.art.title}** — explore the tabs, gallery and quick quiz:\n\n\`\`\`nova-ui title="${tw.title.replace(/"/g, '')}"\n${tw.html}\n\`\`\``, steps: ['Recognized a widget request about a topic', `Researched "${tw.art.title}"`, 'Built an explorable layout'], sources: [{ title: tw.art.title, url: tw.art.url, snippet: truncate(tw.page.extract, 160), site: 'wikipedia.org', thumb: tw.art.thumb }] };
+  }
+  return {
+    md: `I'd love to build one! Tell me what it should do — I design widgets from building blocks like **counters**, **checklists**, **calculators**, **timers**, **countdowns**, **logs**, **ratings**, **polls**, **pickers**, **clocks**, **graphs** and **quizzes**, and they remember your data.\n\nA few ideas to start from:`,
+    steps: ['Recognized a widget request without specifics'],
+    followups: WIDGET_IDEAS.slice(0, 4),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 export async function localAnswer(ctx) {
@@ -500,6 +564,9 @@ export async function localAnswer(ctx) {
 
   const st = smalltalk(t, model);
   if (st) return { md: st, steps: ['Recognized a conversational message'] };
+
+  const studio = await widgetStudio(t, history, signal);
+  if (studio) return studio;
 
   const math = mathIntent(t);
   if (math) return math;

@@ -29,6 +29,7 @@ You can change which Claude model and effort level each Nova model uses in **Set
   - **Create image:** Nova Cloud (free Pollinations.ai model), Nova Studio (an on-device procedural painter for landscapes, space, cities and abstract art), or Claude vector illustrations.
   - **AI Mode:** search-style answers with numbered citations, a source panel, an image strip, "People also ask" and follow-up questions.
   - **Dynamic View:** generated interactive interfaces inside the chat. Built-in ones include calculators, mortgage and savings planners, timers, a solar-system explorer, a physics playground, games, a synth, a weather card and visual topic explorers. With Claude, any interface you describe can be generated.
+  - **Widget Studio:** ask for any widget ("a tracker for my water", "a scoreboard for Alex and Sam", "a calculator where total = price × quantity") and Nova designs it from building blocks: counters, checklists, logs, ratings, timers, countdowns, calculators, pickers, polls, clocks, graphs and quizzes. Widgets save their data on your device. You can revise them in plain English ("make the goal 10", "add a timer") without losing data, and keep them in **My Widgets**. With Claude connected, Claude designs widgets too.
   - **Canvas:** a side-by-side editor with live HTML/CSS/JS preview, a JS console and in-browser Python (Pyodide).
   - **Deep research:** searches several sources and writes a cited report you can export to PDF, Word or Markdown.
   - **Study and learn:** lessons with interactive quizzes and flashcards.
@@ -62,7 +63,7 @@ css/nova.css          theme + all styles
 js/app.js             main controller (chats, composer, actions)
 js/render.js          message rendering + rich blocks
 js/engines/           on-device engine, Claude engine, prompts, knowledge sources
-js/tools/             images, files, canvas, AI Mode, research, study, voice, generative UI
+js/tools/             images, files, canvas, AI Mode, research, study, voice, generative UI, Widget Studio
 sw.js                 offline service worker
 ```
 

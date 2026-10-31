@@ -3,7 +3,7 @@
 import { settings, engineReady } from '../state.js';
 import { getModel } from '../models.js';
 import { sleep, pick, truncate } from '../util.js';
-import { localAnswer, extractTopic, summarize, sentences } from './local.js';
+import { localAnswer, extractTopic, summarize, sentences, widgetReply } from './local.js';
 import { claudeStream, claudeComplete } from './claude.js';
 import { buildSystemPrompt } from './prompt.js';
 import { bestPage, wikiArticle, wikiImages, lookup } from './knowledge.js';
@@ -11,7 +11,8 @@ import { detectAspect, cleanImagePrompt } from '../tools/imagegen.js';
 import { gatherSources, composeAnswer, AIMODE_INSTRUCTIONS, sourcesContext } from '../tools/aimode.js';
 import { runResearch, composeReport, RESEARCH_INSTRUCTIONS } from '../tools/research.js';
 import { makeQuiz } from '../tools/study.js';
-import { matchWidget, explorerWidget } from '../tools/genui.js';
+import { explorerWidget } from '../tools/genui.js';
+import { pickWidget, editWidget, isWidgetEdit } from '../tools/widgetgen.js';
 
 const IMAGE_INTENT = /^(?:please\s+)?(?:can you\s+|could you\s+|i want you to\s+)?(?:generate|create|make|draw|paint|render|design|imagine|produce|show me|give me)\s+(?:me\s+)?(?:an?\s+|the\s+|some\s+|\d+\s+)?(?:[\w-]+\s+){0,3}?(?:image|picture|photo|illustration|drawing|painting|artwork|wallpaper|portrait|logo|icon|art|poster|render|scene)s?\b|^(?:draw|paint|sketch|illustrate)\s+/i;
 
@@ -295,8 +296,20 @@ async function dynamicPipeline(ctx) {
   const { userMsg, msg, version: v, signal } = ctx;
   const model = getModel(msg.model);
   const text = (userMsg.content || '').trim();
-  const w = matchWidget(text);
-  if (w) {
+  // Edits to the last widget, or a fresh design from the Widget Studio.
+  const hist = historyFor(ctx.chat, msg).slice(0, -1);
+  const prev = [...hist].reverse().find((m) => m.role === 'assistant' && /```nova-widget/.test(m.text || ''));
+  if (prev && isWidgetEdit(text)) {
+    try {
+      const all = [...prev.text.matchAll(/```nova-widget[^\n]*\n([\s\S]*?)```/g)];
+      const ed = editWidget(JSON.parse(all[all.length - 1][1]), text);
+      if (ed) return localPipeline(ctx, widgetReply(ed.spec, { change: ed.change }));
+    } catch { /* fall through */ }
+  }
+  const pickd = await pickWidget(text, { signal }).catch((e) => { if (e.name === 'AbortError') throw e; return null; });
+  if (pickd?.kind === 'spec') return localPipeline(ctx, widgetReply(pickd.spec, { notes: pickd.notes }));
+  if (pickd?.kind === 'builtin') {
+    const w = pickd.widget;
     return localPipeline(ctx, { md: `Here's an interactive **${w.title.toLowerCase()}** ✦\n\n\`\`\`nova-ui title="${w.title}" widget="${w.id}"\n\n\`\`\``, steps: ['Dynamic View: matched a built-in interface', `Generated "${w.title}"`] });
   }
   let res = null;

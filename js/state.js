@@ -86,6 +86,20 @@ export function clearMemory() { memory.length = 0; saveJSON(LS_MEMORY, memory); 
 export const customAgents = loadJSON(LS_AGENTS, []);
 export function saveAgents() { saveJSON(LS_AGENTS, customAgents); emit('agents', customAgents); }
 
+// ---------- My Widgets + per-widget saved data ----------
+export const savedWidgets = loadJSON('nova:widgets', []);
+export function persistWidgets() { saveJSON('nova:widgets', savedWidgets); emit('widgets', savedWidgets); }
+export function widgetState(key) {
+  try { return JSON.parse(localStorage.getItem('nova:ws:' + key) || 'null'); } catch { return null; }
+}
+export function setWidgetState(key, state) {
+  try {
+    const s = JSON.stringify(state);
+    if (s.length < 400000) localStorage.setItem('nova:ws:' + key, s);
+  } catch { /* storage full or unavailable */ }
+}
+export function removeWidgetState(key) { try { localStorage.removeItem('nova:ws:' + key); } catch {} }
+
 // ---------- chats (IndexedDB with localStorage fallback) ----------
 let dbp = null;
 function openDB() {
@@ -186,6 +200,7 @@ export function exportAll() {
     settings: { ...settings, anthropicKey: '' },
     memory,
     agents: customAgents,
+    widgets: savedWidgets,
     chats: [...chats.values()],
   };
 }
@@ -194,6 +209,7 @@ export async function importAll(data) {
   if (!data || data.app !== 'nova') throw new Error('This file is not a Nova export.');
   for (const c of data.chats || []) { chats.set(c.id, c); await saveChat(c, true); }
   if (Array.isArray(data.memory)) { data.memory.forEach((m) => { if (!memory.some((x) => x.id === m.id)) memory.push(m); }); saveJSON(LS_MEMORY, memory); }
+  if (Array.isArray(data.widgets)) { data.widgets.forEach((w) => { if (!savedWidgets.some((x) => x.id === w.id)) savedWidgets.push(w); }); persistWidgets(); }
   if (Array.isArray(data.agents)) { data.agents.forEach((a) => { if (!customAgents.some((x) => x.id === a.id)) customAgents.push(a); }); saveAgents(); }
   emit('chats');
 }
