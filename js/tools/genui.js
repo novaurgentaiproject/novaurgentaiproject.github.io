@@ -54,7 +54,7 @@ const W = [];
 const widget = (def) => W.push(def);
 
 widget({
-  id: 'calculator', title: 'Scientific calculator', re: /\bcalculator\b(?!.*(loan|mortgage|tip|bmi|interest|budget))/,
+  id: 'calculator', title: 'Scientific calculator', re: /\bcalculator\b/,
   build: () => `
 <style>.disp{background:var(--card2);border-radius:14px;padding:14px;text-align:right;margin-bottom:12px}.disp .e{color:var(--muted);min-height:20px;font-size:14px;word-break:break-all}.disp .r{font-size:34px;font-weight:600;overflow-x:auto}
 .keys{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.keys button{height:48px;border-radius:12px;border:1px solid var(--border);background:var(--card2);color:var(--text);font:inherit;font-size:16px;cursor:pointer}
@@ -501,7 +501,9 @@ export const WIDGETS = W;
 
 export function matchWidget(text) {
   const t = text.toLowerCase();
-  return W.find((w) => w.re.test(t)) || null;
+  // Specific tools (mortgage, tip, BMI, budget…) win over generic calculator/planner matches.
+  const generic = ['calculator', 'todo'];
+  return W.find((w) => !generic.includes(w.id) && w.re.test(t)) || W.find((w) => generic.includes(w.id) && w.re.test(t)) || null;
 }
 
 export function buildWidget(id, params) {
