@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="nova-g" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b6bff"/>
+      <stop offset=".55" stop-color="#6d3df5"/>
+      <stop offset="1" stop-color="#b16cff"/>
+    </linearGradient>
+    <radialGradient id="nova-c" cx="32" cy="32" r="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path d="M32 3c1.6 15.8 9.2 23.4 29 29-19.8 5.6-27.4 13.2-29 29-1.6-15.8-9.2-23.4-29-29C22.8 26.4 30.4 18.8 32 3Z" fill="url(#nova-g)"/>
+  <circle cx="32" cy="32" r="9" fill="url(#nova-c)" opacity=".85"/>
+</svg>

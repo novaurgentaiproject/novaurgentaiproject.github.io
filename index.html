@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Nova</title>
+  <meta name="description" content="Nova — an AI assistant with six models, image & file generation, coding canvas, AI Mode search and interactive generated interfaces.">
+  <meta name="theme-color" content="#070a1c">
+  <meta name="color-scheme" content="dark light">
+  <meta property="og:title" content="Nova AI">
+  <meta property="og:description" content="Chat, code, create images & files, search with AI Mode and build interactive interfaces.">
+  <meta property="og:image" content="assets/icon-512.png">
+  <link rel="icon" href="assets/nova-logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/nova.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    (function () {
+      try {
+        var s = JSON.parse(localStorage.getItem('nova:settings') || '{}');
+        var t = s.theme || 'dark';
+        if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = t;
+        if (s.fontScale) document.documentElement.style.setProperty('--font-scale', s.fontScale);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <div id="app" class="app">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar" aria-label="Sidebar">
+      <div class="sidebar-head">
+        <button class="brand" data-action="new-chat" title="New chat">
+          <img src="assets/nova-logo.svg" alt="">
+          <span>Nova</span>
+        </button>
+        <button class="icon-btn" data-action="toggle-sidebar" aria-label="Close sidebar" title="Close sidebar"><i data-icon="sidebar"></i></button>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item" data-action="new-chat"><i data-icon="newChat"></i>New chat<span class="kbd">Ctrl ⇧ O</span></button>
+        <button class="nav-item" data-action="search-chats"><i data-icon="search"></i>Search chats<span class="kbd">Ctrl K</span></button>
+        <button class="nav-item" data-action="open-library"><i data-icon="library"></i>Library</button>
+        <button class="nav-item" data-action="open-agents"><i data-icon="grid"></i>Nova Agents</button>
+      </nav>
+      <div class="sidebar-scroll" id="history">
+        <div id="agent-shortcuts"></div>
+        <div id="chat-list"></div>
+      </div>
+      <div class="sidebar-foot">
+        <button class="engine-card" data-action="open-settings" data-tab="engine" id="engine-card">
+          <span class="dot local"></span>
+          <span><b>On-device engine</b><small>Connect Claude for full AI</small></span>
+        </button>
+        <button class="profile-btn" data-action="profile-menu" id="profile-btn">
+          <span class="avatar" id="profile-avatar">N</span>
+          <span><span class="name" id="profile-name">You</span><span class="sub" id="profile-sub">Nova Free</span></span>
+        </button>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" data-action="toggle-sidebar"></div>
+
+    <!-- Main -->
+    <main class="main" id="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn only-collapsed" data-action="toggle-sidebar" aria-label="Open sidebar" title="Open sidebar"><i data-icon="sidebar"></i></button>
+          <button class="icon-btn only-collapsed hide-sm" data-action="new-chat" aria-label="New chat" title="New chat"><i data-icon="newChat"></i></button>
+          <button class="model-btn" id="model-btn" aria-haspopup="menu" aria-expanded="false">
+            <span class="model-name" id="model-name">Nova 2 Flash</span>
+            <span class="engine-tag" id="engine-tag">On-device</span>
+            <i data-icon="chevronDown" class="icon-sm chev"></i>
+          </button>
+        </div>
+        <div class="topbar-right">
+          <button class="pill-btn" data-action="share-chat" id="share-btn" hidden><i data-icon="share" class="icon-sm"></i><span class="hide-sm">Share</span></button>
+          <button class="icon-btn" data-action="toggle-temp" id="temp-btn" title="Temporary chat" aria-label="Temporary chat"><i data-icon="ghost"></i></button>
+          <button class="icon-btn" data-action="chat-menu" id="chat-menu-btn" title="More" aria-label="More options" hidden><i data-icon="more"></i></button>
+        </div>
+      </header>
+      <div class="share-banner" id="share-banner" hidden></div>
+
+      <div class="stage is-empty" id="stage">
+        <div class="scroller" id="scroller">
+          <div class="thread" id="thread" role="log" aria-live="polite"></div>
+        </div>
+
+        <div class="dock" id="dock">
+          <div class="home-hero" id="home-hero"></div>
+
+          <button class="scroll-down" id="scroll-down" aria-label="Scroll to bottom"><i data-icon="arrowDown"></i></button>
+
+          <form class="composer" id="composer" autocomplete="off">
+            <div class="attach-row" id="attach-row"></div>
+            <div class="recorder" id="recorder" hidden>
+              <button type="button" class="icon-btn" data-action="rec-cancel" aria-label="Cancel recording"><i data-icon="trash"></i></button>
+              <span class="rec-dot"></span>
+              <span class="rec-time" id="rec-time">0:00</span>
+              <canvas id="rec-wave" height="36"></canvas>
+              <span class="rec-transcript" id="rec-transcript"></span>
+              <button type="button" class="send-btn" data-action="rec-stop" aria-label="Finish recording"><i data-icon="check"></i></button>
+            </div>
+            <textarea id="prompt" rows="1" placeholder="Ask anything" aria-label="Message Nova"></textarea>
+            <div class="composer-bar">
+              <div class="left">
+                <button type="button" class="icon-btn plus-btn" id="plus-btn" aria-label="Add photos, files and more" aria-haspopup="menu" aria-expanded="false" title="Add photos, files and tools"><i data-icon="plus"></i></button>
+                <span id="tool-slot"></span>
+              </div>
+              <div class="right">
+                <button type="button" class="icon-btn" id="dictate-btn" aria-label="Dictate" title="Dictate"><i data-icon="mic"></i></button>
+                <button type="button" class="send-btn voice" id="voice-btn" aria-label="Start voice mode" title="Voice mode"><i data-icon="waveform"></i></button>
+                <button type="submit" class="send-btn" id="send-btn" aria-label="Send message" hidden><i data-icon="arrowUp"></i></button>
+                <button type="button" class="send-btn stop" id="stop-btn" aria-label="Stop generating" hidden><i data-icon="stop"></i></button>
+              </div>
+            </div>
+          </form>
+
+          <div class="home-suggest" id="home-suggest"></div>
+          <div class="disclaimer" id="disclaimer">Nova can make mistakes. Check important info.</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Canvas (code & docs side panel) -->
+    <aside class="canvas-panel" id="canvas" hidden aria-label="Canvas"></aside>
+  </div>
+
+  <div id="modal-root"></div>
+  <div class="toast-root" id="toast-root" role="status" aria-live="polite"></div>
+  <div class="drop-overlay" id="drop-overlay">
+    <div class="inner">
+      <div class="big-ico"><i data-icon="paperclip" class="icon-lg"></i></div>
+      <h3>Add anything</h3>
+      <p>Drop images, videos, audio or files here to add them to the conversation</p>
+    </div>
+  </div>
+  <input type="file" id="file-input" multiple hidden>
+
+  <noscript><p style="padding:24px">Nova needs JavaScript enabled.</p></noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
