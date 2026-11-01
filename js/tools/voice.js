@@ -1,6 +1,6 @@
 // Voice: dictation (speech-to-text), voice messages (recording + live transcript),
 // read-aloud (text-to-speech) and a full-screen voice conversation mode.
-import { settings, saveSettings } from '../state.js';
+import { settings, saveSettings, on } from '../state.js';
 import { stripMarkdown, formatDuration, h, esc } from '../util.js';
 import { icon } from '../icons.js';
 
@@ -86,6 +86,7 @@ function cancelSpeech() {
 
 /** Call synchronously inside a tap/click: lets iOS and Safari speak later, after async work. */
 export function unlockSpeech() {
+  if (settings.ttsEngine === 'fish' && fishConfigured()) unlockAudio();
   if (!canSpeak) return;
   try {
     listVoices();
@@ -170,46 +171,236 @@ function chunkSpeech(text, max = 170) {
   return out;
 }
 
+// ---------- Fish Audio voices (James) ----------
+// Fish Audio doesn't allow calls straight from a web page (no CORS), so Nova talks
+// to it through the small "Nova voice server" in /voice-server (a Cloudflare Worker).
+export const JAMES_VOICE_ID = '802e3bc2b27e49c2995d23ef70e6ac89';
+export const DEFAULT_VOICE_SERVER = ''; // set to your deployed Worker URL to give every visitor James's voice
+export const VOICE_SERVER_GUIDE = 'https://github.com/novaurgentaiproject/novaurgentaiproject.github.io/blob/HEAD/voice-server/README.md';
+
+export function fishServer() {
+  return String(settings.fishServer || DEFAULT_VOICE_SERVER || '').trim().replace(/\/+$/, '').replace(/\/v1\/tts$/, '');
+}
+export const fishConfigured = () => !!fishServer();
+let fishDownUntil = 0, fishLastError = '';
+/** True when Nova should speak with James (Fish Audio) right now. */
+export function usingFish() {
+  return settings.ttsEngine === 'fish' && fishConfigured() && Date.now() > fishDownUntil;
+}
+export const fishVoiceLabel = () => settings.fishVoiceName || (settings.fishVoice === JAMES_VOICE_ID ? 'James' : 'Custom voice');
+export function fishProblem() { return Date.now() < fishDownUntil ? fishLastError : ''; }
+
+class FishError extends Error { constructor(message, status = 0) { super(message); this.status = status; } }
+function fishMessage(status, msg) {
+  if (status === 401) return 'the Fish Audio API key was rejected';
+  if (status === 402) return 'your Fish Audio account is out of API credit';
+  if (status === 403) return msg || 'the voice server refused this site';
+  if (status === 404) return 'that voice server address looks wrong';
+  if (status === 429) return 'Fish Audio is rate-limiting requests';
+  return msg ? msg.charAt(0).toLowerCase() + msg.slice(1).replace(/\.$/, '') : `the voice server returned an error (${status})`;
+}
+
+/** Synthesize `text` with the Fish Audio voice. Resolves to an object URL of an MP3. */
+export async function fishSynth(text, { signal, model } = {}) {
+  const base = fishServer();
+  if (!base) throw new FishError('no voice server is set up');
+  model = model || settings.fishModel || 's2.1-pro';
+  const headers = { 'Content-Type': 'application/json', model };
+  if (settings.fishKey?.trim()) headers.Authorization = `Bearer ${settings.fishKey.trim()}`;
+  let res;
+  try {
+    res = await fetch(`${base}/v1/tts`, {
+      method: 'POST', headers, signal,
+      body: JSON.stringify({
+        text, reference_id: settings.fishVoice || JAMES_VOICE_ID, format: 'mp3', mp3_bitrate: 128,
+        latency: 'balanced', normalize: true, prosody: { speed: Math.min(2, Math.max(0.5, settings.speechRate || 1)) },
+      }),
+    });
+  } catch (e) {
+    if (e?.name === 'AbortError') throw e;
+    throw new FishError(/api\.fish\.audio/.test(base) ? 'Fish Audio blocks direct browser requests, so use the Nova voice server' : "couldn't reach the voice server");
+  }
+  // Accounts without API credit can still use Fish Audio's free model.
+  if (res.status === 402 && model !== 's2.1-pro-free') {
+    const url = await fishSynth(text, { signal, model: 's2.1-pro-free' });
+    saveSettings({ fishModel: 's2.1-pro-free' });
+    return url;
+  }
+  if (!res.ok) {
+    let msg = '';
+    try { msg = (await res.json())?.message || ''; } catch {}
+    throw new FishError(fishMessage(res.status, msg), res.status);
+  }
+  const blob = await res.blob();
+  if (!blob.size) throw new FishError('the voice server sent back empty audio');
+  return URL.createObjectURL(/^audio\//.test(blob.type) ? blob : new Blob([blob], { type: 'audio/mpeg' }));
+}
+
+/** Ask the voice server whether it's reachable and whether it holds its own API key. */
+export async function checkVoiceServer(base = fishServer()) {
+  if (!base) throw new Error('Enter your voice server address first.');
+  let res;
+  try { res = await fetch(`${base.replace(/\/+$/, '')}/`, { cache: 'no-store' }); }
+  catch { throw new Error(/api\.fish\.audio/.test(base) ? 'Fish Audio blocks direct browser requests. Deploy the Nova voice server and use its address.' : "Couldn't reach the voice server. Check the address."); }
+  let info = {};
+  try { info = await res.json(); } catch {}
+  if (!res.ok) throw new Error(info.message || `The server answered with an error (${res.status}).`);
+  if (info.service !== 'nova-voice') throw new Error("That address works, but it isn't a Nova voice server.");
+  if (info.originAllowed === false) throw new Error(`The voice server is running, but it doesn't allow ${location.origin}. Add that address to ALLOWED_ORIGINS on the server.`);
+  return info;
+}
+
+function markFishDown(err) {
+  fishLastError = err?.message || 'the voice server failed';
+  const auth = err?.status === 401 || err?.status === 403 || err?.status === 404;
+  fishDownUntil = Date.now() + (auth ? 10 * 60e3 : 90e3);
+  window.dispatchEvent(new CustomEvent('nova-voice-problem', { detail: { message: `James's voice isn't available (${fishLastError}), so Nova is using this device's voice.` } }));
+}
+on('settings', () => { fishDownUntil = 0; fishLastError = ''; });
+
+// A single <audio> element, unlocked inside a tap so iOS lets it play later.
+let audioEl = null, silentUrl = null;
+function getAudio() {
+  if (!audioEl) {
+    audioEl = new Audio();
+    audioEl.preload = 'auto';
+    audioEl.setAttribute('playsinline', '');
+  }
+  return audioEl;
+}
+function silentClip() {
+  if (silentUrl) return silentUrl;
+  const n = 160, buf = new ArrayBuffer(44 + n), v = new DataView(buf);
+  const str = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); str(36, 'data'); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  return (silentUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
+}
+function unlockAudio() {
+  try {
+    const a = getAudio();
+    if (!a.paused) return;
+    a.onplaying = a.onended = a.onerror = null;
+    a.src = silentClip();
+    a.play()?.catch?.(() => {});
+  } catch {}
+}
+
 let activeSpeaker = null;
 const liveUtterances = new Set(); // keeps utterances alive so Chrome can't GC them mid-speech
 
 /**
  * A queue-based speaker. `feed(markdownSoFar)` speaks every finished sentence of a
  * reply that is still being written; `end(finalMarkdown)` speaks the rest.
+ * It speaks with James (Fish Audio) when that's set up, and the device's voices otherwise.
  */
 export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, maxChars = 0 } = {}) {
-  if (!canSpeak) return null;
+  const fish = usingFish();
+  if (!canSpeak && !fish) return null;
   activeSpeaker?.stop();
-  const sp = { queue: [], rawPos: 0, consumed: '', spoken: 0, ended: false, stopped: false, started: false, busy: false, failures: 0, blocked: false, limitHit: false, current: null, timers: [] };
-  const clearTimers = () => { sp.timers.forEach(clearTimeout); sp.timers = []; };
+  const sp = { fish, queue: [], rawPos: 0, consumed: '', spoken: 0, ended: false, stopped: false, started: false, busy: false, failures: 0, blocked: false, limitHit: false, timers: [], abort: new AbortController(), urls: new Set(), wordTimer: 0 };
+  const clearTimers = () => { sp.timers.forEach(clearTimeout); sp.timers = []; clearInterval(sp.wordTimer); };
   const finish = () => {
     if (sp.stopped) return;
     sp.stopped = true;
     clearTimers();
+    sp.urls.forEach((u) => URL.revokeObjectURL(u));
     if (activeSpeaker === api) activeSpeaker = null;
     onDone?.({ blocked: sp.blocked });
   };
+  const block = () => {
+    sp.blocked = true;
+    sp.busy = false;
+    onBlocked?.();
+  };
+  const begin = (text) => {
+    unlocked = true;
+    if (!sp.started) { sp.started = true; onStart?.(); }
+    onChunk?.(text);
+  };
+  const next = () => { sp.queue.shift(); sp.busy = false; prefetch(); speakNext(); };
+
+  // Fish Audio: fetch one item at a time, the next while the current one plays,
+  // merging sentences that arrive meanwhile so James speaks in natural phrases.
+  const prefetch = () => {
+    if (!sp.fish || sp.stopped) return;
+    for (let i = 0; i < Math.min(sp.queue.length, 3); i++) {
+      const it = sp.queue[i];
+      if (it.promise) { if (!it.settled) return; continue; }
+      it.promise = fishSynth(it.text, { signal: sp.abort.signal })
+        .then((url) => { it.url = url; sp.urls.add(url); }, (err) => { it.error = err; })
+        .finally(() => { it.settled = true; prefetch(); });
+      return;
+    }
+  };
+  const fallBackToDevice = (err) => {
+    if (sp.abort.signal.aborted) return;
+    sp.fish = false;
+    markFishDown(err);
+    sp.queue.forEach((it) => { if (it.url) URL.revokeObjectURL(it.url); it.promise = it.url = null; });
+    sp.busy = false;
+    if (!canSpeak) { sp.queue = []; sp.ended = true; return finish(); }
+    speakNext();
+  };
+  const playFish = (it) => {
+    if (!it.promise) prefetch();
+    // Wait for the audio only if it isn't ready, so a retry tap plays synchronously (iOS needs that).
+    if (!it.settled) { it.promise.then(() => { if (!sp.stopped) playFish(it); }); return; }
+    if (it.error) return fallBackToDevice(it.error);
+    const a = getAudio();
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      a.onplaying = a.onended = a.onerror = null;
+      URL.revokeObjectURL(it.url);
+      sp.urls.delete(it.url);
+      if (!sp.stopped) next();
+    };
+    a.onplaying = () => {
+      begin(it.text);
+      clearInterval(sp.wordTimer);
+      sp.wordTimer = setInterval(() => onWord?.(), 170);
+      const ms = (Number.isFinite(a.duration) && a.duration > 0 ? a.duration * 1000 : 20000) + 4000;
+      const watchdog = () => { if (settled || sp.stopped) return; if (a.paused || a.ended) return done(); sp.timers.push(setTimeout(watchdog, 3000)); };
+      sp.timers.push(setTimeout(watchdog, ms));
+    };
+    a.onended = done;
+    a.onerror = () => { if (settled || sp.stopped) return; settled = true; clearTimers(); a.onplaying = a.onended = a.onerror = null; fallBackToDevice(new FishError("the audio couldn't be played")); };
+    a.src = it.url;
+    a.playbackRate = 1;
+    Promise.resolve(a.play()).catch((e) => {
+      if (settled || sp.stopped || e?.name === 'AbortError') return;
+      if (e?.name === 'NotAllowedError') { a.onplaying = a.onended = a.onerror = null; return block(); }
+      a.onerror?.();
+    });
+  };
+
   const enqueue = (text) => {
     if (!text || sp.limitHit) return;
-    for (const c of chunkSpeech(text)) {
+    const max = sp.fish ? 260 : 170;
+    for (const c of chunkSpeech(text, max)) {
       if (maxChars && sp.spoken + c.length > maxChars && sp.spoken > 0) {
         sp.limitHit = true;
-        sp.queue.push("There's more in the chat.");
+        sp.queue.push({ text: "There's more in the chat." });
         break;
       }
       sp.spoken += c.length;
-      sp.queue.push(c);
+      const last = sp.queue[sp.queue.length - 1];
+      if (sp.fish && last && !last.promise && sp.queue.length > 1 && last.text.length + c.length < max) last.text += ' ' + c;
+      else sp.queue.push({ text: c });
     }
+    prefetch();
   };
-  const speakNext = async () => {
-    if (sp.stopped || sp.busy || sp.blocked) return;
-    if (!sp.queue.length) { if (sp.ended) finish(); return; }
-    sp.busy = true;
+
+  const speakDevice = async (it) => {
     if (!listVoices().length) await voicesReady;
     const since = performance.now() - lastCancel;
     if (unlocked && since < 150) await new Promise((r) => setTimeout(r, 150 - since));
     if (sp.stopped) return;
-    const text = sp.queue[0];
+    const text = it.text;
     const u = new SpeechSynthesisUtterance(text);
     const voice = sp.noVoice ? null : pickVoice();
     if (voice) u.voice = voice;
@@ -217,7 +408,6 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
     u.rate = settings.speechRate || 1;
     u.pitch = 1;
     u.volume = 1;
-    sp.current = u;
     liveUtterances.add(u);
     let settled = false;
     const done = (ok) => {
@@ -225,18 +415,11 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
       settled = true;
       liveUtterances.delete(u);
       clearTimers();
-      if (sp.current === u) sp.current = null;
       if (sp.stopped) return;
-      sp.queue.shift();
-      sp.busy = false;
       if (ok) sp.failures = 0;
-      speakNext();
+      next();
     };
-    u.onstart = () => {
-      unlocked = true;
-      if (!sp.started) { sp.started = true; onStart?.(); }
-      onChunk?.(text);
-    };
+    u.onstart = () => begin(text);
     u.onboundary = () => onWord?.();
     u.onend = () => done(true);
     u.onerror = (e) => {
@@ -250,13 +433,7 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
       if (voice && !sp.noVoice) { sp.noVoice = true; return speakNext(); } // retry this chunk with the default voice
       sp.failures++;
       if (!sp.started && sp.failures >= 2) return block();
-      sp.queue.shift();
-      speakNext();
-    };
-    const block = () => {
-      sp.blocked = true;
-      sp.busy = false;
-      onBlocked?.();
+      next();
     };
     try {
       if (speechSynthesis.paused) speechSynthesis.resume();
@@ -282,6 +459,15 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
     };
     sp.timers.push(setTimeout(watchdog, expected));
   };
+
+  const speakNext = () => {
+    if (sp.stopped || sp.busy || sp.blocked) return;
+    if (!sp.queue.length) { if (sp.ended) finish(); return; }
+    sp.busy = true;
+    const it = sp.queue[0];
+    return sp.fish ? playFish(it) : speakDevice(it);
+  };
+
   const api = {
     /** Speak every complete sentence of a partial Markdown reply. */
     feed(raw) {
@@ -318,6 +504,11 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
       sp.blocked = false;
       sp.busy = false;
       sp.failures = 0;
+      if (sp.fish) {
+        // Play straight away inside the tap so iOS accepts it.
+        const it = sp.queue[0];
+        if (it?.url) { sp.busy = true; playFish(it); return; }
+      }
       unlockSpeech();
       speakNext();
     },
@@ -325,13 +516,17 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
       if (sp.stopped) return;
       sp.stopped = true;
       clearTimers();
+      sp.abort.abort();
       if (activeSpeaker === api) activeSpeaker = null;
-      cancelSpeech();
+      if (audioEl && !audioEl.paused) { audioEl.onplaying = audioEl.onended = audioEl.onerror = null; audioEl.pause(); }
+      sp.urls.forEach((u) => URL.revokeObjectURL(u));
+      if (canSpeak) cancelSpeech();
       liveUtterances.clear();
     },
     get started() { return sp.started; },
     get blocked() { return sp.blocked; },
     get done() { return sp.stopped; },
+    get fish() { return sp.fish; },
   };
   activeSpeaker = api;
   return api;
@@ -339,14 +534,18 @@ export function createSpeaker({ onStart, onDone, onBlocked, onChunk, onWord, max
 
 /** Read a whole message aloud. Returns false if speech isn't available. */
 export function speak(text, { onEnd, onStart, onBlocked } = {}) {
-  if (!canSpeak) return false;
+  if (!canSpeak && !usingFish()) return false;
   const clean = speechText(text);
   if (!clean) { onEnd?.(); return false; }
   const sp = createSpeaker({ onStart, onDone: () => onEnd?.(), onBlocked: () => { sp.stop(); onBlocked?.(); onEnd?.(); } });
   sp.end(String(text));
   return true;
 }
-export function stopSpeaking() { activeSpeaker?.stop(); if (canSpeak) cancelSpeech(); }
+export function stopSpeaking() {
+  activeSpeaker?.stop();
+  if (canSpeak) cancelSpeech();
+  if (audioEl && !audioEl.paused) { audioEl.onplaying = audioEl.onended = audioEl.onerror = null; audioEl.pause(); }
+}
 export function isSpeaking() { return !!activeSpeaker; }
 
 // ---------- Voice message recorder ----------
@@ -429,10 +628,14 @@ export function openVoiceMode({ modelName, onUserText }) {
     const base = (navigator.language || 'en').split('-')[0].toLowerCase();
     const list = listVoices().filter((v) => (v.lang || '').toLowerCase().startsWith(base) && !NOVELTY.test(v.name));
     const auto = pickVoice();
-    return `<option value="">Automatic${auto && !settings.voice ? ` · ${esc(auto.name)}` : ''}</option>${list.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === settings.voice ? ' selected' : ''}>${esc(v.name)}${v.localService === false ? ' · online' : ''}</option>`).join('')}`;
+    const fishSel = settings.ttsEngine === 'fish';
+    const sel = (v) => (!fishSel && v === (settings.voice || '') ? ' selected' : '');
+    const fish = `<optgroup label="Fish Audio"><option value="fish"${fishSel ? ' selected' : ''}>${esc(fishVoiceLabel())}${fishConfigured() ? '' : ' (needs setup)'}</option></optgroup>`;
+    const device = canSpeak ? `<optgroup label="This device"><option value="device:"${sel('')}>Automatic${auto ? ` · ${esc(auto.name)}` : ''}</option>${list.map((v) => `<option value="device:${esc(v.voiceURI)}"${sel(v.voiceURI)}>${esc(v.name)}${v.localService === false ? ' · online' : ''}</option>`).join('')}</optgroup>` : '';
+    return fish + device;
   };
   const el = h(`<div class="voice-mode" role="dialog" aria-modal="true" aria-label="Voice mode">
-<div class="vm-top"><span class="vm-title">${icon('waveform', 'icon-sm')} ${esc(modelName)}</span>${canSpeak ? `<label class="vm-voice">${icon('volume', 'icon-sm')}<select aria-label="Nova's voice">${voiceOptions()}</select></label>` : ''}</div>
+<div class="vm-top"><span class="vm-title">${icon('waveform', 'icon-sm')} ${esc(modelName)}</span>${canSpeak || fishConfigured() ? `<label class="vm-voice">${icon('volume', 'icon-sm')}<select aria-label="Nova's voice">${voiceOptions()}</select></label>` : ''}</div>
 <button class="vm-orb" type="button" aria-label="Voice orb"><canvas></canvas></button>
 <div class="vm-text">
   <div class="vm-status" aria-live="polite">Starting…</div>
@@ -493,7 +696,8 @@ export function openVoiceMode({ modelName, onUserText }) {
   const stopSpeaker = () => { speaker?.stop(); speaker = null; };
   const afterSpeaking = () => { if (!closed && (state === 'speaking' || state === 'thinking')) setTimeout(listen, 350); };
   const makeSpeaker = (info = {}) => {
-    if (speaker || !canSpeak) return speaker;
+    if (speaker) return speaker;
+    if (!canSpeak && !usingFish()) return null;
     const myTurn = turn;
     speaker = createSpeaker({
       maxChars: info.engine === 'claude' ? 0 : 650,
@@ -605,10 +809,17 @@ export function openVoiceMode({ modelName, onUserText }) {
     showCaption(caption.textContent);
   };
   voiceSel?.addEventListener('change', () => {
-    saveSettings({ voice: voiceSel.value });
+    const v = voiceSel.value;
+    if (v === 'fish') saveSettings({ ttsEngine: 'fish' });
+    else saveSettings({ ttsEngine: 'device', voice: v.replace(/^device:/, '') });
+    unlockSpeech();
     if (state === 'listening') { const r = recog; recog = null; r?.abort(); }
     turn++;
     stopSpeaker();
+    if (v === 'fish' && !fishConfigured()) {
+      setState('paused', `${fishVoiceLabel()} needs the Nova voice server. Set it up in Settings → Speech; until then Nova uses this device's voice. Tap the orb to keep talking.`);
+      return;
+    }
     setState('speaking', 'Speaking — tap the orb to interrupt');
     const myTurn = turn;
     speaker = createSpeaker({ onDone: () => { if (turn === myTurn && !closed) { speaker = null; listen(); } }, onBlocked: () => { if (turn === myTurn) { speaker = null; listen(); } } });

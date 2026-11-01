@@ -537,6 +537,13 @@ async function finishVoiceMessage() {
 }
 
 // ---------- voice mode ----------
+let lastVoiceProblem = 0;
+window.addEventListener('nova-voice-problem', (e) => {
+  if (Date.now() - lastVoiceProblem < 60e3) return;
+  lastVoiceProblem = Date.now();
+  toast(e.detail.message, { type: 'error' });
+});
+
 function startVoiceMode() {
   unlockSpeech(); // must happen inside the tap so iOS lets Nova talk back later
   stopSpeaking();

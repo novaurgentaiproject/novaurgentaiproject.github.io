@@ -1,0 +1,5 @@
+# Deploy with:  npx wrangler deploy        (run inside this folder)
+# Then add your key:  npx wrangler secret put FISH_API_KEY
+name = "nova-voice"
+main = "worker.js"
+compatibility_date = "2026-10-01"

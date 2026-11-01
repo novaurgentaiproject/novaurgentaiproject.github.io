@@ -6,7 +6,7 @@ import { openModal, toast, confirmDialog, lightbox, promptDialog } from './ui.js
 import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS, savedWidgets, persistWidgets, removeWidgetState } from './state.js';
 import { MODELS, CLAUDE_MODELS, EFFORTS, modelGradient } from './models.js';
 import { testKey } from './engines/claude.js';
-import { listVoices, speak, canSpeak, unlockSpeech, pickVoice } from './tools/voice.js';
+import { listVoices, speak, canSpeak, unlockSpeech, pickVoice, usingFish, fishConfigured, fishProblem, fishVoiceLabel, checkVoiceServer, JAMES_VOICE_ID, DEFAULT_VOICE_SERVER, VOICE_SERVER_GUIDE } from './tools/voice.js';
 import { allAgents, BUILTIN_AGENTS } from './agents.js';
 import { renderMarkdown } from './markdown.js';
 import { highlight } from './highlight.js';
@@ -71,8 +71,24 @@ export function openSettings(app, tab = 'general') {
 <div class="memory-list">${memory.length ? memory.map((x) => `<div class="mem"><span>${esc(x.text)}</span><button class="icon-btn" data-delmem="${x.id}" title="Forget">${icon('trash', 'icon-sm')}</button></div>`).join('') : '<div class="s-help">No memories yet.</div>'}</div></div>`,
     speech: () => {
       const voices = listVoices();
+      const fish = settings.ttsEngine === 'fish';
+      const problem = fishProblem();
+      const fishStatus = !fishConfigured() ? 'Not set up yet. Nova uses this device\'s voice until you add a voice server.'
+        : problem ? `<span style="color:var(--danger)">${esc(problem.charAt(0).toUpperCase() + problem.slice(1))}.</span>` : '';
       return `
-<div class="setting"><div><div class="s-label">Voice</div><div class="s-help">Used for read-aloud and voice mode.</div></div><select class="field" data-sel="voice"><option value="">Automatic${!settings.voice && pickVoice() ? ` (${esc(pickVoice().name)})` : ' (most natural voice)'}</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === settings.voice ? ' selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select></div>
+<div class="setting"><div><div class="s-label">Nova's voice</div><div class="s-help">Used for voice mode and read-aloud.</div></div><select class="field" data-ttsengine><option value="fish"${fish ? ' selected' : ''}>${esc(fishVoiceLabel())} · Fish Audio</option><option value="device"${fish ? '' : ' selected'}>This device's voices</option></select></div>
+${fish ? `<div class="setting col voice-server">
+<div class="s-label">${esc(fishVoiceLabel())} · Fish Audio</div>
+<div class="s-help">Fish Audio doesn't accept requests straight from websites, so Nova reaches it through a small <b>Nova voice server</b> that you host for free on Cloudflare. <a href="${VOICE_SERVER_GUIDE}" target="_blank" rel="noopener">How to set it up (about 5 minutes)</a></div>
+<label class="vs-field"><span>Voice server address</span><span class="inline"><input class="field" data-fishserver placeholder="${esc(DEFAULT_VOICE_SERVER || 'https://nova-voice.your-name.workers.dev')}" value="${esc(settings.fishServer)}" autocomplete="off" spellcheck="false" inputmode="url"><button class="btn sm" data-fishcheck>Check</button></span></label>
+<label class="vs-field"><span>Fish Audio API key <em>optional: only if your voice server doesn't store one</em></span><input class="field" type="password" data-fishkey placeholder="Paste your Fish Audio API key" value="${esc(settings.fishKey)}" autocomplete="off"></label>
+<div class="vs-row">
+<label class="vs-field"><span>Voice model ID</span><input class="field" data-fishvoice value="${esc(settings.fishVoice)}" placeholder="${JAMES_VOICE_ID}" autocomplete="off" spellcheck="false"></label>
+<label class="vs-field"><span>Fish model</span><select class="field" data-fishmodel>${[['s2.1-pro', 'S2.1 Pro (best)'], ['s2.1-pro-free', 'S2.1 Pro Free'], ['s2-pro', 'S2 Pro'], ['s1', 'S1 (retiring)']].map(([v, l]) => `<option value="${v}"${settings.fishModel === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+</div>
+<div class="inline"><button class="btn sm" data-fishtest>${icon('volume', 'icon-sm')} Play ${esc(fishVoiceLabel())}</button><span class="s-help" data-fishstatus>${fishStatus}</span></div>
+</div>` : ''}
+<div class="setting"><div><div class="s-label">${fish ? 'Backup voice' : 'Voice'}</div><div class="s-help">${fish ? `This device's voice, used when ${esc(fishVoiceLabel())} isn't available.` : 'Used for read-aloud and voice mode.'}</div></div><select class="field" data-sel="voice"><option value="">Automatic${!settings.voice && pickVoice() ? ` (${esc(pickVoice().name)})` : ' (most natural voice)'}</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === settings.voice ? ' selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select></div>
 <div class="setting"><div><div class="s-label">Speaking rate</div></div><div class="inline"><input type="range" min="0.6" max="1.6" step="0.1" value="${settings.speechRate}" data-range="speechRate" style="width:160px"><span data-ratev>${settings.speechRate}×</span></div></div>
 <div class="setting"><div><div class="s-label">Read responses aloud automatically</div></div>${switchHTML('autoRead', settings.autoRead)}</div>
 <div class="setting"><div><div class="s-label">Test voice</div></div><button class="btn sm" data-testvoice ${canSpeak ? '' : 'disabled'}>${icon('volume', 'icon-sm')} Play sample</button></div>`;
@@ -137,6 +153,41 @@ ${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;alig
       const r = panel.querySelector('[data-range]');
       r.oninput = () => { saveSettings({ speechRate: +r.value }); panel.querySelector('[data-ratev]').textContent = r.value + '×'; };
       panel.querySelector('[data-testvoice]').onclick = () => unlockSpeech() || speak(`Hi${settings.name ? ' ' + settings.name : ''}! I'm Nova. This is how I sound.`);
+      panel.querySelector('[data-ttsengine]').onchange = (e) => { saveSettings({ ttsEngine: e.target.value }); show('speech'); };
+      const fst = panel.querySelector('[data-fishstatus]');
+      const say = (html) => { if (fst) fst.innerHTML = html; };
+      const server = panel.querySelector('[data-fishserver]');
+      if (server) {
+        server.onchange = () => {
+          const v = server.value.trim();
+          saveSettings({ fishServer: v });
+          say(/api\.fish\.audio/i.test(v) ? '<span style="color:var(--danger)">That\'s Fish Audio\'s own address. Browsers can\'t call it directly, so use your Nova voice server\'s address.</span>' : '');
+        };
+        panel.querySelector('[data-fishkey]').onchange = (e) => saveSettings({ fishKey: e.target.value.trim() });
+        panel.querySelector('[data-fishmodel]').onchange = (e) => saveSettings({ fishModel: e.target.value });
+        panel.querySelector('[data-fishvoice]').onchange = (e) => {
+          const id = (/[0-9a-f]{32}/i.exec(e.target.value) || [''])[0].toLowerCase() || JAMES_VOICE_ID;
+          e.target.value = id;
+          saveSettings({ fishVoice: id, fishVoiceName: id === JAMES_VOICE_ID ? 'James' : 'Fish voice' });
+        };
+        panel.querySelector('[data-fishcheck]').onclick = async () => {
+          saveSettings({ fishServer: server.value.trim() });
+          say('Checking…');
+          try {
+            const info = await checkVoiceServer();
+            say(`<span style="color:var(--success)">✓ Connected.</span> ${info.serverKey ? 'The server has its own API key, so you\'re all set.' : settings.fishKey ? 'Using the API key below.' : 'Now paste your Fish Audio API key below, or store it on the server.'}`);
+          } catch (err) { say(`<span style="color:var(--danger)">${esc(err.message)}</span>`); }
+        };
+        panel.querySelector('[data-fishtest]').onclick = () => {
+          unlockSpeech();
+          if (!usingFish()) { say(fishConfigured() ? esc(fishProblem() || 'Not available right now.') : 'Add your voice server address first.'); return; }
+          say('Generating…');
+          speak(`Hi${settings.name ? ' ' + settings.name : ''}! I'm Nova, and this is my voice.`, {
+            onStart: () => say(usingFish() ? `<span style="color:var(--success)">✓ Playing ${esc(fishVoiceLabel())}.</span>` : `<span style="color:var(--danger)">${esc(fishProblem() || 'It didn\'t work')}.</span> Played the backup voice instead.`),
+            onBlocked: () => say('Your browser blocked the audio. Tap Play again.'),
+          });
+        };
+      }
       if (canSpeak && !listVoices().length) speechSynthesis.onvoiceschanged = () => { if (panel.isConnected && body.querySelector('[data-tab="speech"].active')) show('speech'); };
     }
     if (t === 'data') {

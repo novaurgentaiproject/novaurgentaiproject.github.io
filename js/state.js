@@ -25,6 +25,13 @@ export const DEFAULT_SETTINGS = {
   voice: '',
   speechRate: 1,
   voiceCaptions: false,
+  // Nova's voice: 'fish' = James on Fish Audio (through the Nova voice server), 'device' = the browser's voices
+  ttsEngine: 'fish',
+  fishServer: '',
+  fishKey: '',
+  fishVoice: '802e3bc2b27e49c2995d23ef70e6ac89',
+  fishVoiceName: 'James',
+  fishModel: 's2.1-pro',
   autoRead: false,
 };
 
@@ -198,7 +205,7 @@ export function exportAll() {
     app: 'nova',
     version: 1,
     exportedAt: new Date().toISOString(),
-    settings: { ...settings, anthropicKey: '' },
+    settings: { ...settings, anthropicKey: '', fishKey: '' },
     memory,
     agents: customAgents,
     widgets: savedWidgets,
