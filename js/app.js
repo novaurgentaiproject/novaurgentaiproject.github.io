@@ -14,7 +14,7 @@ import { allAgents, getAgent } from './agents.js';
 import { readAttachment, buildFile, describeAttachment, fileBadge } from './tools/files.js';
 import { cleanImagePrompt } from './tools/imagegen.js';
 import { openCanvas, closeCanvas, isCanvasOpen } from './tools/canvas.js';
-import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, formatDuration } from './tools/voice.js';
+import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, unlockSpeech, formatDuration } from './tools/voice.js';
 
 const S = {
   chat: null,
@@ -25,7 +25,6 @@ const S = {
   dictation: null,
   shared: null,
   voice: null,
-  voiceResolve: null,
   stick: true,
   theme: null,
 };
@@ -272,12 +271,13 @@ async function smartTitle(chat) {
 // ---------------------------------------------------------------------------
 function newVersion(model) { return { content: '', thinking: '', model, createdAt: Date.now(), artifacts: {} }; }
 
-async function send(text, { tool = S.tool, attachments = null } = {}) {
+async function send(text, { tool = S.tool, attachments = null, voice = null } = {}) {
   text = (text ?? '').trim();
   const atts = attachments ?? S.attachments.filter((a) => !a.loading);
-  if (S.attachments.some((a) => a.loading)) { toast('Still reading your attachment…'); return; }
-  if (!text && !atts.length) return;
-  if (S.streaming) { toast('Nova is still responding — stop it first or wait a moment.'); return; }
+  const bail = (msg) => { if (msg) toast(msg); voice?.resolve(msg || ''); };
+  if (!voice && S.attachments.some((a) => a.loading)) { bail('Still reading your attachment…'); return; }
+  if (!text && !atts.length) { bail(''); return; }
+  if (S.streaming) { bail('Nova is still responding — stop it first or wait a moment.'); return; }
   if (S.shared) await continueShared();
   stopDictation();
   stopSpeaking();
@@ -306,11 +306,11 @@ async function send(text, { tool = S.tool, attachments = null } = {}) {
   updateTopbar();
   S.stick = true;
   scrollToBottom(true);
-  await generate(chat, asst, user, tool);
+  await generate(chat, asst, user, tool, { voice });
   if (first && !asst.versions[0].error) smartTitle(chat);
 }
 
-async function generate(chat, msg, userMsg, tool = userMsg.tool) {
+async function generate(chat, msg, userMsg, tool = userMsg.tool, { voice = null } = {}) {
   const version = msg.versions[msg.active];
   const ctrl = new AbortController();
   S.streaming = { chatId: chat.id, msgId: msg.id, ctrl };
@@ -322,7 +322,8 @@ async function generate(chat, msg, userMsg, tool = userMsg.tool) {
   });
   draw();
   try {
-    await respond({ chat, userMsg, msg, version, tool, agent: getAgent(chat.agentId), signal: ctrl.signal, update: draw });
+    const update = voice ? () => { draw(); voice.onPartial?.(version.content, { engine: version.engine }); } : draw;
+    await respond({ chat, userMsg, msg, version, tool, agent: getAgent(chat.agentId), signal: ctrl.signal, update, voice: !!voice });
   } catch (e) {
     if (e?.name === 'AbortError') version.notice = { type: 'info', text: 'Response stopped.' };
     else { version.error = e?.message || String(e); console.error(e); }
@@ -344,7 +345,7 @@ async function generate(chat, msg, userMsg, tool = userMsg.tool) {
     renderSidebar();
     updateTopbar();
     updateComposerState();
-    if (S.voiceResolve) { const r = S.voiceResolve; S.voiceResolve = null; r(version.error ? `Sorry — ${version.error}` : version.content); }
+    if (voice) voice.resolve(version.error ? `Sorry, something went wrong. ${version.error}` : version.content);
     else if (settings.autoRead && version.content && !version.error) speak(version.content);
     if (tool === 'canvas' && S.chat === chat) openFirstCode(msg);
   }
@@ -537,10 +538,18 @@ async function finishVoiceMessage() {
 
 // ---------- voice mode ----------
 function startVoiceMode() {
+  unlockSpeech(); // must happen inside the tap so iOS lets Nova talk back later
+  stopSpeaking();
   const m = getModel(currentModelId());
   const vm = openVoiceMode({
     modelName: m.name,
-    onUserText: (text) => new Promise((resolve) => { S.voiceResolve = resolve; send(text, { attachments: [] }); }),
+    onUserText: async (text, { onPartial }) => {
+      if (S.streaming) {
+        stopGenerating();
+        for (let i = 0; i < 60 && S.streaming; i++) await sleep(50);
+      }
+      return new Promise((resolve) => send(text, { attachments: [], voice: { resolve, onPartial } }));
+    },
   });
   if (vm.error) toast(vm.error, { type: 'error' });
 }
@@ -849,8 +858,13 @@ const ACTIONS = {
     const m = findMsg(el);
     if (!m) return;
     if (isSpeaking()) { stopSpeaking(); el.classList.remove('on'); return; }
+    unlockSpeech();
     el.classList.add('on');
-    if (!speak(m.versions[m.active].content, { onEnd: () => el.classList.remove('on') })) toast('Read aloud isn\'t supported in this browser.', { type: 'error' });
+    const ok = speak(m.versions[m.active].content, {
+      onEnd: () => el.classList.remove('on'),
+      onBlocked: () => toast('Your browser didn\'t play the audio. Check that your device isn\'t on silent, then try again.', { type: 'error' }),
+    });
+    if (!ok) { el.classList.remove('on'); toast('Read aloud isn\'t supported in this browser.', { type: 'error' }); }
   },
   'msg-regen': (el) => { const m = findMsg(el); if (m) regenerate(m); },
   'msg-more': (el) => { const m = findMsg(el); if (m) messageMoreMenu(el, m); },

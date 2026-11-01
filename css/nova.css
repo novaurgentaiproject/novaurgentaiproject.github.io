@@ -939,15 +939,48 @@ kbd {
   position: fixed; inset: 0; z-index: 330; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 24px 16px 40px;
   background: radial-gradient(800px 600px at 50% 40%, rgba(60, 40, 160, .35), transparent 70%), #04061a; color: #fff; animation: fade-in .25s;
 }
-.voice-mode .vm-top { width: 100%; display: flex; justify-content: space-between; align-items: center; color: #c9cdf3; font-size: 14px; }
-.voice-mode canvas { width: min(70vw, 380px); height: min(70vw, 380px); }
+.voice-mode .vm-top { width: 100%; max-width: 720px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #c9cdf3; font-size: 14px; }
+.voice-mode .vm-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .01em; }
+.voice-mode .vm-voice {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 58vw; padding: 6px 10px 6px 12px; border-radius: 999px;
+  background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .12); color: #c9cdf3;
+}
+.voice-mode .vm-voice select {
+  appearance: none; -webkit-appearance: none; background: transparent; border: 0; color: #fff; font: inherit; font-size: 13px;
+  max-width: 100%; min-width: 0; text-overflow: ellipsis; cursor: pointer; padding-right: 2px;
+}
+.voice-mode .vm-voice select option { background: #0b1033; color: #fff; }
+.voice-mode .vm-orb { background: none; border: 0; padding: 0; border-radius: 50%; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.voice-mode .vm-orb:focus-visible { outline: 2px solid rgba(177, 108, 255, .7); outline-offset: 6px; }
+.voice-mode canvas { display: block; width: min(70vw, 380px); height: min(70vw, 380px); }
+.voice-mode .vm-text { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 640px; min-height: 96px; }
 .voice-mode .vm-status { font-size: 16px; color: #c9cdf3; min-height: 24px; text-align: center; }
-.voice-mode .vm-caption { font-size: 18px; text-align: center; max-width: 640px; min-height: 54px; color: #fff; line-height: 1.5; opacity: .92; }
+.voice-mode[data-state="speaking"] .vm-status { color: #d9c8ff; }
+.voice-mode .vm-you { font-size: 17px; text-align: center; color: #fff; line-height: 1.45; max-height: 3em; overflow: hidden; transition: opacity .3s, color .3s; }
+.voice-mode .vm-you.sent { color: #9aa1d6; font-size: 15px; }
+.voice-mode[data-state="speaking"] .vm-you { opacity: 0; }
+.voice-mode .vm-caption {
+  font-size: 18px; text-align: center; color: #fff; line-height: 1.5; max-height: 7.5em; overflow: auto;
+  padding: 10px 16px; border-radius: 16px; background: rgba(255, 255, 255, .06); animation: fade-in .2s;
+}
+.voice-mode .vm-caption[hidden], .voice-mode .vm-tap[hidden] { display: none; }
+.voice-mode .vm-tap {
+  display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 999px; font-weight: 600; color: #fff;
+  background: linear-gradient(135deg, #3b6bff, #9d4dff); box-shadow: 0 8px 28px rgba(120, 80, 255, .45); animation: vm-pulse 1.6s ease-in-out infinite;
+}
+@keyframes vm-pulse { 50% { transform: scale(1.04); box-shadow: 0 10px 36px rgba(140, 90, 255, .6); } }
 .voice-mode .vm-controls { display: flex; gap: 18px; }
 .voice-mode .vm-controls button { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .1); color: #fff; }
 .voice-mode .vm-controls button:hover { background: rgba(255, 255, 255, .18); }
 .voice-mode .vm-controls button.end { background: #ff4f74; }
 .voice-mode .vm-controls button.muted { background: #fff; color: #04061a; }
+/* Captions glyph drawn with CSS: a rounded rectangle with the letters CC. */
+.voice-mode .cc-glyph {
+  display: grid; place-items: center; width: 26px; height: 19px; border: 2px solid currentColor; border-radius: 5px;
+  font-size: 10px; font-weight: 800; letter-spacing: .02em; line-height: 1;
+}
+.voice-mode .vm-controls button.cc[aria-pressed="true"] { background: #fff; color: #04061a; }
+@media (max-height: 560px) { .voice-mode canvas { width: min(42vh, 300px); height: min(42vh, 300px); } .voice-mode .vm-text { min-height: 64px; } }
 
 /* ---------- Share banner ---------- */
 .share-banner {

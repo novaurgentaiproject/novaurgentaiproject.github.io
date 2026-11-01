@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS = {
   memoryEnabled: true,
   voice: '',
   speechRate: 1,
+  voiceCaptions: false,
   autoRead: false,
 };
 

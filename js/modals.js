@@ -6,7 +6,7 @@ import { openModal, toast, confirmDialog, lightbox, promptDialog } from './ui.js
 import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS, savedWidgets, persistWidgets, removeWidgetState } from './state.js';
 import { MODELS, CLAUDE_MODELS, EFFORTS, modelGradient } from './models.js';
 import { testKey } from './engines/claude.js';
-import { listVoices, speak, canSpeak } from './tools/voice.js';
+import { listVoices, speak, canSpeak, unlockSpeech, pickVoice } from './tools/voice.js';
 import { allAgents, BUILTIN_AGENTS } from './agents.js';
 import { renderMarkdown } from './markdown.js';
 import { highlight } from './highlight.js';
@@ -72,7 +72,7 @@ export function openSettings(app, tab = 'general') {
     speech: () => {
       const voices = listVoices();
       return `
-<div class="setting"><div><div class="s-label">Voice</div><div class="s-help">Used for read-aloud and voice mode.</div></div><select class="field" data-sel="voice"><option value="">System default</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === settings.voice ? ' selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select></div>
+<div class="setting"><div><div class="s-label">Voice</div><div class="s-help">Used for read-aloud and voice mode.</div></div><select class="field" data-sel="voice"><option value="">Automatic${!settings.voice && pickVoice() ? ` (${esc(pickVoice().name)})` : ' (most natural voice)'}</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}"${v.voiceURI === settings.voice ? ' selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select></div>
 <div class="setting"><div><div class="s-label">Speaking rate</div></div><div class="inline"><input type="range" min="0.6" max="1.6" step="0.1" value="${settings.speechRate}" data-range="speechRate" style="width:160px"><span data-ratev>${settings.speechRate}×</span></div></div>
 <div class="setting"><div><div class="s-label">Read responses aloud automatically</div></div>${switchHTML('autoRead', settings.autoRead)}</div>
 <div class="setting"><div><div class="s-label">Test voice</div></div><button class="btn sm" data-testvoice ${canSpeak ? '' : 'disabled'}>${icon('volume', 'icon-sm')} Play sample</button></div>`;
@@ -136,7 +136,7 @@ ${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;alig
     if (t === 'speech') {
       const r = panel.querySelector('[data-range]');
       r.oninput = () => { saveSettings({ speechRate: +r.value }); panel.querySelector('[data-ratev]').textContent = r.value + '×'; };
-      panel.querySelector('[data-testvoice]').onclick = () => speak(`Hi${settings.name ? ' ' + settings.name : ''}! I'm Nova. This is how I sound.`);
+      panel.querySelector('[data-testvoice]').onclick = () => unlockSpeech() || speak(`Hi${settings.name ? ' ' + settings.name : ''}! I'm Nova. This is how I sound.`);
       if (canSpeak && !listVoices().length) speechSynthesis.onvoiceschanged = () => { if (panel.isConnected && body.querySelector('[data-tab="speech"].active')) show('speech'); };
     }
     if (t === 'data') {

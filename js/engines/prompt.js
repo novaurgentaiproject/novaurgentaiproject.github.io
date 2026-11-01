@@ -20,7 +20,14 @@ const TOOL_GUIDE = {
   file: 'The user wants a file. Create it with a `nova-file` block and give a one-sentence description.',
 };
 
-export function buildSystemPrompt({ model, tool = null, agent = null, extra = '' } = {}) {
+const VOICE_GUIDE = `VOICE MODE IS ON. The user is talking to you out loud and everything you write is read aloud by text-to-speech, so write for the ear:
+- Sound like a natural spoken conversation. Usually answer in one to three short sentences; go longer only when the user asks for detail, a story or step-by-step help, and then use short spoken paragraphs.
+- Plain sentences only: no Markdown, headings, bullet points, numbered lists, tables, bold, links, emojis or code blocks. Say lists as flowing speech ("first…, then…, and finally…").
+- Write numbers, units and symbols the way you'd say them ("about 20 degrees", "three to five minutes", "15 percent").
+- If the user explicitly asks for an image, widget, interface, chart or file, create it with the usual block and say one short sentence about it; it appears in the chat behind the voice screen. Otherwise don't use rich blocks.
+- Ask a short follow-up question when it keeps the conversation going, but don't do it every time.`;
+
+export function buildSystemPrompt({ model, tool = null, agent = null, extra = '', voice = false } = {}) {
   const date = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const p = [];
   p.push(`You are ${model.name}, an AI model in the Nova family, running inside the Nova chat interface. The Nova lineup: ${MODELS.map((m) => m.name).join(', ')}. ${model.persona}`);
@@ -74,5 +81,6 @@ The fact to remember, phrased in third person
 \`\`\``);
   if (tool && TOOL_GUIDE[tool]) p.push(TOOL_GUIDE[tool]);
   if (extra) p.push(extra);
+  if (voice) p.push(VOICE_GUIDE);
   return p.join('\n\n');
 }

@@ -1,5 +1,5 @@
 // Nova service worker — offline app shell (network-first, cache fallback).
-const VERSION = 'nova-v3';
+const VERSION = 'nova-v4';
 const SHELL = [
   './',
   'index.html',

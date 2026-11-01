@@ -77,7 +77,7 @@ export async function claudePipeline(ctx, { extra = '', userSuffix = '', effortB
   const map = settings.modelMap[model.id] || model.claude;
   let effort = map.effort || 'medium';
   if (tool === 'think' || effortBoost) effort = bumpEffort(effort);
-  const system = buildSystemPrompt({ model, tool, agent: ctx.agent, extra });
+  const system = buildSystemPrompt({ model, tool, agent: ctx.agent, extra, voice: !!ctx.voice });
   const messages = buildClaudeMessages(ctx.chat, msg, userSuffix);
   v.engine = 'claude';
   v.engineModel = map.model;
@@ -147,7 +147,7 @@ export async function localPipeline(ctx, override = null) {
   const model = getModel(msg.model);
   v.engine = 'local';
   const res = override || await localAnswer({
-    text: userMsg.content, attachments: userMsg.attachments || [], model, signal: ctx.signal,
+    text: userMsg.content, attachments: userMsg.attachments || [], model, signal: ctx.signal, voice: !!ctx.voice,
     history: historyFor(chat, msg).slice(0, -1), seed: (msg.versions.length - 1),
     depth: Math.min(3, model.depth + (ctx.tool === 'think' ? 1 : 0)),
   });

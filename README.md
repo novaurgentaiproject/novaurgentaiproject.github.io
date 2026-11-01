@@ -35,7 +35,7 @@ You can change which Claude model and effort level each Nova model uses in **Set
   - **Study and learn:** lessons with interactive quizzes and flashcards.
   - **Create file:** real PDF, Word (.docx), Excel (.xlsx), CSV, Markdown, JSON, HTML and calendar (.ics) files.
   - **Think longer:** asks the model to reason more before answering.
-- **Voice:** dictation, voice messages with live transcripts, read-aloud, and a full-screen voice conversation mode.
+- **Voice:** dictation, voice messages with live transcripts and read-aloud. **Voice mode** (the wave button) is a hands-free spoken conversation: you talk, and Nova answers out loud. It starts speaking while the reply is still being written and picks the most natural voice on your device (or the one you choose). With Claude connected it answers in a short, conversational style. Captions are optional.
 - **Attachments:** images (color analysis on-device, full vision with Claude), videos (key-frame extraction), audio, PDF/DOCX/XLSX/CSV and code or text files.
 - **Nova Agents:** 10 built-in specialists, and you can create your own.
 - **Chats:**

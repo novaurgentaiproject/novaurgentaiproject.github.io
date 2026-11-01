@@ -66,11 +66,12 @@ export function extractTopic(q) {
 // ---------------------------------------------------------------------------
 // Intents
 // ---------------------------------------------------------------------------
-function smalltalk(t, model) {
+function smalltalk(t, model, voice = false) {
   const name = settings.name ? `, ${settings.name.split(' ')[0]}` : '';
   if (/^(hi|hey|hello|yo|sup|hiya|howdy|greetings|good (morning|afternoon|evening)|what'?s up)\b[\s!.,]*(nova|there)?[\s!.]*$/i.test(t)) {
     const h = new Date().getHours();
     const tod = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+    if (voice) return `${pick([`${tod}${name}!`, `Hey${name}!`, `Hello${name}!`])} I'm ${model.name}. ${pick(['What can I help you with?', 'What would you like to talk about?', 'What are we working on today?'])}`;
     return `${pick([`${tod}${name}! ✦`, `Hey${name}! 👋`, `Hello${name}!`])} I'm **${model.name}**. What are we working on today?\n\nA few things I can do right now:\n- 💬 Answer questions with live facts from Wikipedia\n- 🖼️ Create images — just say *"create an image of…"*\n- 💻 Write and run code, or build mini web apps\n- 🧩 Build interactive tools — calculators, timers, quizzes, simulations\n- 📄 Make files — PDF, Word, Excel, CSV and more\n- 🌦️ Check the weather, convert units and currencies, do math`;
   }
   if (/^how are (you|u)( doing| today)?\??$|^how'?s it going\??$/i.test(t)) return `I'm running smoothly and ready to help ✦ How about you${name}? What's on your mind?`;
@@ -562,7 +563,7 @@ export async function localAnswer(ctx) {
   const mem = memoryIntent(t);
   if (mem) return { md: mem, steps: ['Updated memory'] };
 
-  const st = smalltalk(t, model);
+  const st = smalltalk(t, model, !!ctx.voice);
   if (st) return { md: st, steps: ['Recognized a conversational message'] };
 
   const studio = await widgetStudio(t, history, signal);
