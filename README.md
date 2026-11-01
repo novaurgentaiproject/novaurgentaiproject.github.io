@@ -37,6 +37,7 @@ You can change which Claude model and effort level each Nova model uses in **Set
   - **Think longer:** asks the model to reason more before answering.
 - **Voice:** dictation, voice messages with live transcripts and read-aloud. **Voice mode** (the wave button) is a hands-free spoken conversation: you talk, and Nova answers out loud. It starts speaking while the reply is still being written and picks the most natural voice on your device (or the one you choose). With Claude connected it answers in a short, conversational style. Captions are optional.
 - **James's voice (Fish Audio):** Nova can speak with **James**, a natural AI voice from Fish Audio, in voice mode and read-aloud. Fish Audio can't be called directly from a web page, so this runs through a small free relay you host on Cloudflare. [Set it up in about 5 minutes](voice-server/README.md), then choose **James** in **Settings → Speech**. Without it, Nova uses the device's voices.
+- **Listening that works on iPhone and iPad:** Safari's built-in speech recognition goes deaf after audio plays and is unreliable in Home Screen apps. Voice mode works around that: it ends your turn itself when you pause, and it restarts the microphone cleanly after Nova talks. It explains what's wrong if the microphone stops, and you can always type instead. With the voice server set up, Nova records you itself and Fish Audio transcribes, which avoids Safari's recognizer completely.
 - **Attachments:** images (color analysis on-device, full vision with Claude), videos (key-frame extraction), audio, PDF/DOCX/XLSX/CSV and code or text files.
 - **Nova Agents:** 10 built-in specialists, and you can create your own.
 - **Chats:**
@@ -66,7 +67,7 @@ js/render.js          message rendering + rich blocks
 js/engines/           on-device engine, Claude engine, prompts, knowledge sources
 js/tools/             images, files, canvas, AI Mode, research, study, voice, generative UI, Widget Studio
 sw.js                 offline service worker
-voice-server/         Cloudflare Worker that relays speech to Fish Audio (James's voice)
+voice-server/         Cloudflare Worker that relays speech to and from Fish Audio (James's voice, listening)
 ```
 
 ## Privacy
@@ -75,4 +76,4 @@ voice-server/         Cloudflare Worker that relays speech to Fish Audio (James'
 - With live data on, topic queries go to Wikipedia, Open-Meteo and Frankfurter.
 - Nova Cloud image prompts go to Pollinations.ai. Switch to **Nova Studio** in Settings to keep image generation on-device.
 - With Claude connected, messages go directly to Anthropic's API under your key.
-- With James's voice on, the text Nova speaks goes through your voice server to Fish Audio. Nothing else is sent.
+- With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.

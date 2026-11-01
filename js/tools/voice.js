@@ -3,18 +3,20 @@
 import { settings, saveSettings, on } from '../state.js';
 import { stripMarkdown, formatDuration, h, esc } from '../util.js';
 import { icon } from '../icons.js';
+import { canCloudRecord, primeAudioContext, recordUtterance, transcribe } from './hearing.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const canRecognize = !!SR;
 export const canSpeak = 'speechSynthesis' in window;
 export const canRecord = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 
-export function createRecognizer({ onInterim, onFinal, onEnd, onError, continuous = true, lang = navigator.language || 'en-US' } = {}) {
+export function createRecognizer({ onInterim, onFinal, onEnd, onError, onStart, onAudioStart, onSpeechStart, continuous = true, lang = navigator.language || 'en-US' } = {}) {
   if (!SR) return null;
   const r = new SR();
   r.lang = lang;
   r.continuous = continuous;
   r.interimResults = true;
+  r.maxAlternatives = 1;
   let finalText = '';
   r.onresult = (e) => {
     let interim = '';
@@ -26,7 +28,15 @@ export function createRecognizer({ onInterim, onFinal, onEnd, onError, continuou
   };
   r.onerror = (e) => onError?.(e.error);
   r.onend = () => onEnd?.(finalText);
-  return { start: () => { try { r.start(); } catch {} }, stop: () => { try { r.stop(); } catch {} }, abort: () => { try { r.abort(); } catch {} }, get text() { return finalText; } };
+  r.onstart = () => onStart?.();
+  r.onaudiostart = () => onAudioStart?.();
+  r.onspeechstart = () => onSpeechStart?.();
+  return {
+    start: () => { try { r.start(); } catch (e) { onError?.('start-failed'); setTimeout(() => onEnd?.(finalText), 0); } },
+    stop: () => { try { r.stop(); } catch {} },
+    abort: () => { try { r.abort(); } catch {} },
+    get text() { return finalText; },
+  };
 }
 
 // ---------- Text to speech ----------
@@ -609,12 +619,39 @@ export async function startRecording({ canvas, onTick, onTranscript } = {}) {
 }
 
 // ---------- Voice mode ----------
+// Safari's recognizer (every iPhone/iPad browser, and Safari on Mac) never ends a
+// turn on its own and goes deaf after audio plays, so Nova handles turns itself there.
+const IS_IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_SAFARI = /Safari\//.test(UA) && !/Chrome\/|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPR\/|Android/.test(UA);
+const WEBKIT_STT = IS_IOS || IS_SAFARI;
+const isStandalone = () => document.documentElement.classList.contains('standalone') || navigator.standalone === true;
+const cloudListening = () => canCloudRecord && fishConfigured();
+
+/** How voice mode hears you: the browser's speech recognition ('device'), Fish Audio through the voice server ('cloud'), or neither. */
+export function listenMode() {
+  const pref = settings.listenEngine || 'auto';
+  if (pref === 'cloud' && cloudListening()) return 'cloud';
+  if (pref === 'device' && SR) return 'device';
+  if (cloudListening() && (!SR || WEBKIT_STT)) return 'cloud';
+  if (SR) return 'device';
+  return cloudListening() ? 'cloud' : 'none';
+}
+
 const VM_ERRORS = {
   'not-allowed': 'Microphone access is blocked. Allow it for this site in your browser settings, then tap the orb.',
-  'service-not-allowed': 'Speech recognition is turned off on this device. On iPhone or iPad, enable Siri & Dictation in Settings.',
+  'service-not-allowed': IS_IOS
+    ? 'Speech recognition is turned off. On iPhone or iPad, turn on Settings → Siri (or Keyboard → Enable Dictation), then tap the orb.'
+    : 'Speech recognition is turned off in this browser. Turn it on, then tap the orb.',
   'audio-capture': 'No microphone was found. Connect one, then tap the orb.',
   network: 'Speech recognition needs an internet connection. Tap the orb to try again.',
+  'language-not-supported': 'Speech recognition doesn\'t support your device language yet.',
 };
+const noHearingMessage = () => (IS_IOS && isStandalone()
+  ? 'The Home Screen app can\'t use iOS speech recognition. Open Nova in Safari to talk, or set up the voice server in Settings → Speech so Nova can listen itself. You can type below; Nova still answers out loud.'
+  : 'This browser can\'t recognize speech. Try Chrome, Edge or Safari, or set up the voice server in Settings → Speech. You can type below; Nova still answers out loud.');
+const deafMessage = () => (IS_IOS
+  ? `I can't hear anything. If you were talking, iOS may have stopped the microphone (a known ${isStandalone() ? 'Home Screen app' : 'Safari'} bug). Tap the orb to try again, type below, ${isStandalone() ? 'or open Nova in Safari' : 'or reload the page'}. Setting up the voice server in Settings → Speech avoids this.`
+  : 'Still there? Tap the orb when you\'re ready to talk.');
 
 /**
  * Full-screen spoken conversation. `onUserText(text, { onPartial })` sends the user's
@@ -622,8 +659,9 @@ const VM_ERRORS = {
  * while the reply streams so Nova starts talking before it has finished writing.
  */
 export function openVoiceMode({ modelName, onUserText }) {
-  if (!SR) return { error: 'Voice mode needs speech recognition, which this browser doesn\'t support. Try Chrome, Edge or Safari.' };
   unlockSpeech();
+  if (cloudListening()) primeAudioContext();
+  let mode = listenMode();
   const voiceOptions = () => {
     const base = (navigator.language || 'en').split('-')[0].toLowerCase();
     const list = listVoices().filter((v) => (v.lang || '').toLowerCase().startsWith(base) && !NOVELTY.test(v.name));
@@ -642,27 +680,38 @@ export function openVoiceMode({ modelName, onUserText }) {
   <div class="vm-you"></div>
   <div class="vm-caption" hidden></div>
   <button class="vm-tap" type="button" hidden>${icon('volume', 'icon-sm')} Tap to hear Nova</button>
+  <form class="vm-type" hidden><input type="text" placeholder="Type to Nova…" enterkeyhint="send" autocomplete="off" aria-label="Type a message to Nova"><button type="submit" aria-label="Send">${icon('arrowUp', 'icon-sm')}</button></form>
 </div>
 <div class="vm-controls">
   <button class="mute" type="button" title="Mute microphone" aria-label="Mute microphone">${icon('mic')}</button>
   <button class="cc" type="button" title="Show captions" aria-label="Show captions" aria-pressed="${settings.voiceCaptions ? 'true' : 'false'}"><span class="cc-glyph">CC</span></button>
+  <button class="kb" type="button" title="Type instead" aria-label="Type instead" aria-pressed="false">${icon('keyboard')}</button>
   <button class="end" type="button" title="End voice mode" aria-label="End voice mode">${icon('x')}</button>
 </div></div>`);
   document.body.appendChild(el);
   const orb = el.querySelector('.vm-orb'), canvas = orb.querySelector('canvas');
   const status = el.querySelector('.vm-status'), you = el.querySelector('.vm-you'), caption = el.querySelector('.vm-caption');
-  const tapBtn = el.querySelector('.vm-tap'), muteBtn = el.querySelector('.mute'), ccBtn = el.querySelector('.cc');
+  const tapBtn = el.querySelector('.vm-tap'), muteBtn = el.querySelector('.mute'), ccBtn = el.querySelector('.cc'), kbBtn = el.querySelector('.kb');
+  const typeForm = el.querySelector('.vm-type'), typeInput = typeForm.querySelector('input');
   const voiceSel = el.querySelector('.vm-voice select');
-  let state = 'idle', muted = false, closed = false, level = 0, target = 0, recog = null, raf, speaker = null, turn = 0, empties = 0, fatal = false;
+  let state = 'idle', muted = false, closed = false, level = 0, target = 0, raf, speaker = null, turn = 0, fatal = false;
+  let recog = null, cloudRec = null, endDeviceTurn = null, listenToken = 0, silentStreak = 0;
   let captions = !!settings.voiceCaptions;
 
   const setState = (s, text) => {
     state = s;
     status.textContent = text;
     el.dataset.state = s;
-    orb.setAttribute('aria-label', { listening: 'Stop listening and send', speaking: 'Interrupt Nova', paused: 'Start talking', idle: 'Start talking', blocked: 'Skip and keep talking' }[s] || 'Voice orb');
+    el.dataset.listen = mode;
+    orb.setAttribute('aria-label', { listening: 'Done talking — send', speaking: 'Interrupt Nova', paused: 'Start talking', idle: 'Start talking', muted: 'Start talking', blocked: 'Skip and keep talking' }[s] || 'Voice orb');
   };
+  const say = (text) => { if (status.textContent !== text) status.textContent = text; };
   const showCaption = (text) => { caption.textContent = text; caption.hidden = !(captions || state === 'blocked') || !text; };
+  const showType = (on, focus = false) => {
+    typeForm.hidden = !on;
+    kbBtn.setAttribute('aria-pressed', String(on));
+    if (on && focus) setTimeout(() => typeInput.focus(), 30);
+  };
   const bump = (v) => { target = Math.min(1, Math.max(target, v)); };
 
   const draw = (t) => {
@@ -674,7 +723,7 @@ export function openVoiceMode({ modelName, onUserText }) {
     const W = (canvas.width = canvas.clientWidth * devicePixelRatio), H = (canvas.height = canvas.clientHeight * devicePixelRatio);
     const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.28 * (1 + level * 0.45);
     ctx.clearRect(0, 0, W, H);
-    const thinking = state === 'thinking';
+    const thinking = state === 'thinking' || state === 'transcribing';
     for (let k = 3; k >= 0; k--) {
       const r = R * (1 + k * 0.18 + Math.sin(t / 600 + k) * 0.03 + (thinking ? Math.sin(t / 260 + k * 1.3) * 0.04 : 0));
       const g = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
@@ -693,8 +742,8 @@ export function openVoiceMode({ modelName, onUserText }) {
   };
   raf = requestAnimationFrame(draw);
 
+  // ----- talking back -----
   const stopSpeaker = () => { speaker?.stop(); speaker = null; };
-  const afterSpeaking = () => { if (!closed && (state === 'speaking' || state === 'thinking')) setTimeout(listen, 350); };
   const makeSpeaker = (info = {}) => {
     if (speaker) return speaker;
     if (!canSpeak && !usingFish()) return null;
@@ -704,7 +753,7 @@ export function openVoiceMode({ modelName, onUserText }) {
       onStart: () => { if (turn === myTurn && !closed) setState('speaking', 'Speaking — tap the orb to interrupt'); },
       onChunk: (text) => { if (turn === myTurn) { bump(0.5); showCaption(text); } },
       onWord: () => bump(0.42 + Math.random() * 0.2),
-      onDone: () => { if (turn !== myTurn || closed) return; speaker = null; tapBtn.hidden = true; afterSpeaking(); },
+      onDone: () => { if (turn !== myTurn || closed) return; speaker = null; tapBtn.hidden = true; if (state === 'speaking' || state === 'thinking') setTimeout(listen, 150); },
       onBlocked: () => {
         if (turn !== myTurn || closed) return;
         setState('blocked', 'Your browser didn\'t play Nova\'s voice. Check that your device isn\'t on silent.');
@@ -716,47 +765,165 @@ export function openVoiceMode({ modelName, onUserText }) {
   };
   let lastReply = '';
 
+  // ----- listening -----
+  const stopListening = () => {
+    listenToken++;
+    endDeviceTurn = null;
+    const r = recog; recog = null; r?.abort();
+    const c = cloudRec; cloudRec = null; c?.abort();
+  };
+
+  // Wait until speech output is completely quiet: iOS hears nothing while it talks.
+  const whenQuiet = (fn) => {
+    const t0 = performance.now();
+    const check = () => {
+      if (closed) return;
+      const busy = canSpeak && (speechSynthesis.speaking || speechSynthesis.pending);
+      if (busy && performance.now() - t0 < 2500) return setTimeout(check, 100);
+      setTimeout(fn, WEBKIT_STT ? 300 : 0);
+    };
+    check();
+  };
+
   const listen = () => {
     if (closed || fatal) return;
+    stopListening();
     if (muted) { setState('muted', 'Microphone muted — tap the mic to talk'); return; }
     if (document.hidden) { setState('paused', 'Paused — tap the orb to keep talking'); return; }
     stopSpeaker();
     tapBtn.hidden = true;
-    setState('listening', 'Listening…');
     you.textContent = '';
     you.classList.remove('sent');
     showCaption('');
-    let heard = '', sent = false;
+    if (mode === 'none') { setState('paused', noHearingMessage()); showType(true); return; }
+    setState('listening', 'Starting microphone…');
+    const token = listenToken;
+    whenQuiet(() => {
+      if (closed || token !== listenToken || state !== 'listening') return;
+      if (mode === 'cloud') listenCloud(token); else listenDevice(token);
+    });
+  };
+
+  const nothingHeard = (why) => {
+    silentStreak++;
+    // On iPhone/iPad a recognizer that never hears anything is usually WebKit's "deaf
+    // microphone" bug. Nova can listen itself instead if the voice server is set up.
+    if (mode === 'device' && WEBKIT_STT && silentStreak >= 2 && cloudListening()) {
+      mode = 'cloud';
+      silentStreak = 0;
+      setState('listening', 'Switching to Fish Audio listening…');
+      setTimeout(listen, 700);
+      return;
+    }
+    if (why === 'stuck' && silentStreak >= 2) {
+      setState('paused', IS_IOS
+        ? 'The microphone didn\'t start. Check that Nova may use the microphone and that Siri & Dictation is on, then tap the orb, or type below.'
+        : 'The microphone didn\'t start. Check that this site may use the microphone, then tap the orb, or type below.');
+      showType(true);
+      return;
+    }
+    if (silentStreak >= (WEBKIT_STT ? 2 : 4)) { silentStreak = 0; setState('paused', deafMessage()); if (WEBKIT_STT) showType(true); return; }
+    setTimeout(listen, 250);
+  };
+
+  // The browser's own speech recognition.
+  const listenDevice = (token) => {
+    const t0 = performance.now();
+    let heard = '', got = false, lastChange = 0, done = false;
     const r = createRecognizer({
-      continuous: false,
+      continuous: WEBKIT_STT,
+      onStart: () => { got = true; if (!done && !heard) say('Listening…'); },
+      onAudioStart: () => { got = true; if (!done && !heard) say('Listening…'); },
+      onSpeechStart: () => { if (!done) say('Hearing you…'); },
       onInterim: (i, f) => {
         const next = (f + ' ' + i).trim();
-        if (next.length > heard.length) bump(0.55 + Math.random() * 0.25);
+        got = true;
+        if (!next || next === heard) return;
+        lastChange = performance.now();
         heard = next;
+        bump(0.55 + Math.random() * 0.25);
         you.textContent = heard;
+        say('Hearing you…');
       },
-      onEnd: (f) => {
-        if (recog === r) recog = null;
-        if (closed || sent || state !== 'listening') return;
-        const text = (f || heard).trim();
-        if (!text) {
-          if (++empties >= 4) { setState('paused', 'Still there? Tap the orb when you\'re ready to talk.'); empties = 0; return; }
-          setTimeout(listen, 250);
-          return;
-        }
-        sent = true;
-        empties = 0;
-        ask(text);
-      },
+      onEnd: (f) => end((f || heard), 'ended'),
       onError: (err) => {
-        if (VM_ERRORS[err]) { if (err !== 'network') fatal = err === 'service-not-allowed'; setState('paused', VM_ERRORS[err]); }
+        if (done || !VM_ERRORS[err]) return; // no-speech / aborted end the turn normally
+        done = true;
+        cleanup();
+        if (closed || token !== listenToken) return;
+        if ((err === 'service-not-allowed' || err === 'not-allowed' || err === 'audio-capture') && cloudListening()) { mode = 'cloud'; setState('listening', 'Switching to Fish Audio listening…'); setTimeout(listen, 500); return; }
+        if (err === 'service-not-allowed' || err === 'language-not-supported') fatal = true;
+        setState('paused', VM_ERRORS[err]);
+        showType(true);
       },
     });
     recog = r;
+    const timer = setInterval(() => {
+      if (done) return;
+      const now = performance.now();
+      if (heard && now - lastChange > (WEBKIT_STT ? 1200 : 1700)) end(heard, 'pause');
+      else if (!got && now - t0 > 4500) end('', 'stuck');
+      else if (!heard && now - t0 > 9000) end('', 'silent');
+      else if (now - t0 > 30000) end(heard, 'max');
+    }, 150);
+    const cleanup = () => { clearInterval(timer); if (recog === r) recog = null; if (endDeviceTurn === tapEnd) endDeviceTurn = null; };
+    const tapEnd = () => end(heard, 'tap');
+    endDeviceTurn = tapEnd;
+    function end(text, why) {
+      if (done) return;
+      done = true;
+      cleanup();
+      // abort() (not stop()) releases Safari's microphone straight away, before Nova talks.
+      if (why !== 'ended') r.abort();
+      if (closed || token !== listenToken) return;
+      text = String(text || '').trim();
+      if (text) { silentStreak = 0; ask(text); return; }
+      nothingHeard(why);
+    }
     r.start();
   };
 
+  // Fish Audio: record with the Web Audio API and transcribe through the voice server.
+  const listenCloud = (token) => {
+    const rec = recordUtterance({
+      onReady: () => { if (cloudRec === rec) say('Listening…'); },
+      onLevel: (l) => { if (state === 'listening') bump(0.08 + l * 0.85); },
+      onSpeechStart: () => { if (cloudRec === rec) say('Hearing you…'); },
+    });
+    cloudRec = rec;
+    rec.promise.then(async (res) => {
+      if (cloudRec !== rec || closed || token !== listenToken) return;
+      cloudRec = null;
+      if (!res) return nothingHeard('silent');
+      silentStreak = 0;
+      setState('transcribing', 'Understanding…');
+      let text = '';
+      try { text = await transcribe(res.wav, { base: fishServer(), key: settings.fishKey?.trim() }); }
+      catch (e) {
+        if (closed || token !== listenToken || state !== 'transcribing') return;
+        if (SR) { mode = 'device'; setState('paused', `Fish Audio couldn't transcribe that (${e.message}), so Nova is switching to this device's speech recognition.`); setTimeout(listen, 2600); }
+        else { setState('paused', `Nova couldn't understand the recording: ${e.message}. Tap the orb to try again, or type below.`); showType(true); }
+        return;
+      }
+      if (closed || token !== listenToken || state !== 'transcribing') return;
+      if (!text) { setState('listening', 'Sorry, I didn\'t catch that.'); setTimeout(listen, 1100); return; }
+      ask(text);
+    }, (e) => {
+      if (cloudRec === rec) cloudRec = null;
+      if (closed || e?.name === 'AbortError' || token !== listenToken) return;
+      if (e?.name === 'NotAllowedError' || e?.name === 'SecurityError') {
+        setState('paused', IS_IOS ? 'Microphone access is blocked. Allow it for Nova (Settings → Apps → Safari → Microphone), then tap the orb.' : 'Microphone access is blocked. Allow it for this site, then tap the orb.');
+        showType(true);
+        return;
+      }
+      if (SR) { mode = 'device'; listen(); return; }
+      setState('paused', e?.name === 'NotFoundError' ? 'No microphone was found.' : `The microphone couldn't start (${e?.message || e}).`);
+      showType(true);
+    });
+  };
+
   const ask = async (text) => {
+    stopListening();
     const myTurn = ++turn;
     you.textContent = text;
     you.classList.add('sent');
@@ -780,11 +947,13 @@ export function openVoiceMode({ modelName, onUserText }) {
     sp.end(lastReply);
   };
 
+  // ----- controls -----
   orb.addEventListener('click', () => {
     unlockSpeech();
+    if (cloudListening()) primeAudioContext();
     if (state === 'speaking' || state === 'blocked') { turn++; stopSpeaker(); listen(); }
-    else if (state === 'listening') recog?.stop();
-    else if (state === 'paused' || state === 'idle') { fatal = false; empties = 0; listen(); }
+    else if (state === 'listening') { if (endDeviceTurn) endDeviceTurn(); else cloudRec?.stop(); }
+    else if (state === 'paused' || state === 'idle' || state === 'muted') { fatal = false; silentStreak = 0; if (muted) muteBtn.click(); else listen(); }
   });
   tapBtn.addEventListener('click', () => {
     if (!speaker) return;
@@ -792,14 +961,26 @@ export function openVoiceMode({ modelName, onUserText }) {
     setState('speaking', 'Speaking — tap the orb to interrupt');
     speaker.retry();
   });
+  typeForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = typeInput.value.trim();
+    if (!text) return;
+    typeInput.value = '';
+    unlockSpeech();
+    turn++;
+    stopSpeaker();
+    ask(text);
+  });
+  kbBtn.onclick = () => showType(typeForm.hidden, true);
   muteBtn.onclick = () => {
     unlockSpeech();
+    if (cloudListening()) primeAudioContext();
     muted = !muted;
     muteBtn.classList.toggle('muted', muted);
     muteBtn.innerHTML = icon(muted ? 'micOff' : 'mic');
     muteBtn.title = muted ? 'Unmute microphone' : 'Mute microphone';
-    if (muted) { if (state === 'listening') { const r = recog; recog = null; r?.abort(); setState('muted', 'Microphone muted — tap the mic to talk'); } }
-    else if (state !== 'speaking' && state !== 'thinking') listen();
+    if (muted) { if (state === 'listening' || state === 'paused') { stopListening(); setState('muted', 'Microphone muted — tap the mic to talk'); } }
+    else if (state !== 'speaking' && state !== 'thinking' && state !== 'transcribing') { silentStreak = 0; fatal = false; listen(); }
   };
   ccBtn.onclick = () => {
     captions = !captions;
@@ -813,7 +994,7 @@ export function openVoiceMode({ modelName, onUserText }) {
     if (v === 'fish') saveSettings({ ttsEngine: 'fish' });
     else saveSettings({ ttsEngine: 'device', voice: v.replace(/^device:/, '') });
     unlockSpeech();
-    if (state === 'listening') { const r = recog; recog = null; r?.abort(); }
+    stopListening();
     turn++;
     stopSpeaker();
     if (v === 'fish' && !fishConfigured()) {
@@ -830,7 +1011,7 @@ export function openVoiceMode({ modelName, onUserText }) {
   const onVisibility = () => {
     if (!document.hidden || closed) return;
     turn++;
-    const r = recog; recog = null; r?.abort();
+    stopListening();
     stopSpeaker();
     setState('paused', 'Paused — tap the orb to keep talking');
   };
@@ -839,7 +1020,7 @@ export function openVoiceMode({ modelName, onUserText }) {
     closed = true;
     turn++;
     cancelAnimationFrame(raf);
-    recog?.abort();
+    stopListening();
     stopSpeaker();
     el.remove();
     document.removeEventListener('keydown', onKey, true);
@@ -852,8 +1033,8 @@ export function openVoiceMode({ modelName, onUserText }) {
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('visibilitychange', onVisibility);
   el.querySelector('.end').onclick = close;
-  setTimeout(listen, 350);
-  return { close };
+  setTimeout(listen, 250);
+  return { close, get mode() { return mode; } };
 }
 
 export { formatDuration };

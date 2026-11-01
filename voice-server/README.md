@@ -1,10 +1,13 @@
 # Nova voice server (James · Fish Audio)
 
-Nova can talk in voice mode and read replies aloud with **James**, a voice on [Fish Audio](https://fish.audio) (voice model `802e3bc2b27e49c2995d23ef70e6ac89`, listed there as "Energetic Male").
+The voice server gives Nova two things through [Fish Audio](https://fish.audio):
+
+- **A voice:** Nova talks in voice mode and reads replies aloud with **James** (voice model `802e3bc2b27e49c2995d23ef70e6ac89`, listed on Fish Audio as "Energetic Male").
+- **Ears:** Nova records what you say and Fish Audio transcribes it. On iPhone and iPad this is the dependable way to talk to Nova. Safari's built-in speech recognition stops hearing after Nova has spoken, and in Home Screen apps it often works only once per launch. With the voice server set up, Nova uses Fish Audio listening there automatically.
 
 Fish Audio doesn't let websites call its API directly: it sends no CORS headers, and its WebSocket API needs an `Authorization` header that browsers can't set. So Nova sends speech requests to a tiny relay that you host for free on Cloudflare Workers. The relay adds the missing headers, only accepts requests from your Nova site, and can keep your Fish Audio API key secret on the server.
 
-Until a voice server is set up, Nova uses the device's built-in voices.
+Until a voice server is set up, Nova uses the device's built-in voice and speech recognition.
 
 ## 1. Get a Fish Audio API key
 
@@ -48,7 +51,9 @@ Open the Worker's address in a browser. You should see something like:
 3. Paste the Worker address into **Voice server address** and click **Check**.
 4. Click **Play James**.
 
-Voice mode (the wave button) and read-aloud now use James. If the server or Fish Audio fails (for example a wrong key, no credit or no internet), Nova falls back to the device's voice and shows a short message.
+Voice mode (the wave button) and read-aloud now use James. On iPhone, iPad and Safari, voice mode also listens through Fish Audio; you can change that under **Settings → Speech → Listening**. If the server or Fish Audio fails (for example a wrong key, no credit or no internet), Nova falls back to the device's voice and speech recognition and shows a short message.
+
+**Already deployed an earlier version?** Paste the latest [`worker.js`](worker.js) into your Worker and deploy again; speech-to-text needs the new `/v1/asr` route. Opening the Worker's address should show `"features":["tts","asr"]`.
 
 To give **every visitor** James's voice without opening Settings, put your Worker address in `DEFAULT_VOICE_SERVER` in [`js/tools/voice.js`](../js/tools/voice.js).
 
@@ -61,10 +66,11 @@ To give **every visitor** James's voice without opening Settings, put your Worke
 | `FISH_VOICE_ID` | No | Default voice. Defaults to James (`802e3bc2b27e49c2995d23ef70e6ac89`). |
 | `LOCK_VOICE` | No | Set to `true` to always use `FISH_VOICE_ID`, whatever the site asks for. |
 | `MAX_CHARS` | No | Longest text accepted per request (default 1500). Nova sends short phrases of about 250 characters. |
+| `MAX_AUDIO_MB` | No | Largest recording accepted for transcription (default 8 MB, about 4 minutes). Nova's recordings are usually under 1 MB. |
 
 ## Costs and safety
 
-- Fish Audio bills API usage by the amount of text spoken. Nova sends only the text it actually says out loud: spoken replies in voice mode, and messages you tap to read aloud. It skips code, widgets and other blocks.
+- Fish Audio bills text-to-speech by the amount of text spoken, and speech-to-text by the length of audio. Nova sends only the text it actually says out loud (spoken replies in voice mode, and messages you tap to read aloud), skipping code, widgets and other blocks. For listening it sends only the part of the recording where you were talking, not the silence while it waits, as a small 16 kHz recording.
 - If `FISH_API_KEY` is stored on the server, anyone using your Nova site can make Nova speak with your credit. The origin check stops other websites from using your server, but it can't stop someone who scripts requests on purpose. To limit exposure:
   - set a spending limit or keep a small balance on Fish Audio,
   - add a rate-limiting rule for the Worker in Cloudflare, or

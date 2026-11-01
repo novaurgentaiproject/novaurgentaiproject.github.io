@@ -1,5 +1,5 @@
 // Nova service worker — offline app shell (network-first, cache fallback).
-const VERSION = 'nova-v5';
+const VERSION = 'nova-v6';
 const SHELL = [
   './',
   'index.html',
@@ -28,6 +28,7 @@ const SHELL = [
   'js/tools/canvas.js',
   'js/tools/files.js',
   'js/tools/genui.js',
+  'js/tools/hearing.js',
   'js/tools/imagegen.js',
   'js/tools/research.js',
   'js/tools/study.js',

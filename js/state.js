@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = {
   fishVoice: '802e3bc2b27e49c2995d23ef70e6ac89',
   fishVoiceName: 'James',
   fishModel: 's2.1-pro',
+  listenEngine: 'auto', // how voice mode hears you: 'auto' | 'device' (browser speech recognition) | 'cloud' (Fish Audio)
   autoRead: false,
 };
 

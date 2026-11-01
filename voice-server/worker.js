@@ -1,5 +1,7 @@
-// Nova voice server: a tiny Cloudflare Worker that relays text-to-speech
-// requests from the Nova website to Fish Audio.
+// Nova voice server: a tiny Cloudflare Worker that relays speech requests from
+// the Nova website to Fish Audio: text-to-speech (James's voice) and
+// speech-to-text (so Nova can hear you where the browser can't, such as
+// Home Screen apps on iPhone and iPad).
 //
 // Why it exists: Fish Audio's API doesn't send CORS headers, so a web page
 // can't call it directly. This Worker adds them, checks where requests come
@@ -13,6 +15,7 @@
 //   FISH_VOICE_ID    (optional) default voice. Defaults to James.
 //   LOCK_VOICE       (optional) "true" to always use FISH_VOICE_ID.
 //   MAX_CHARS        (optional) longest text accepted per request (default 1500).
+//   MAX_AUDIO_MB     (optional) largest recording accepted for transcription (default 8).
 
 const JAMES = '802e3bc2b27e49c2995d23ef70e6ac89';
 const DEFAULT_ORIGINS = [
@@ -44,16 +47,43 @@ export default {
     // Health check: open to everyone (it reveals nothing secret) so you can visit it
     // in a browser, and so Nova can explain when its site isn't on the allowed list.
     if (request.method === 'GET' && (path === '/' || path === '/health')) {
-      return new Response(JSON.stringify({ service: 'nova-voice', ok: true, serverKey: !!env.FISH_API_KEY, voice: env.FISH_VOICE_ID || JAMES, originAllowed: !origin || originOk }), {
+      return new Response(JSON.stringify({ service: 'nova-voice', ok: true, features: ['tts', 'asr'], serverKey: !!env.FISH_API_KEY, voice: env.FISH_VOICE_ID || JAMES, originAllowed: !origin || originOk }), {
         headers: { ...cors, 'Access-Control-Allow-Origin': origin || '*', 'Content-Type': 'application/json' },
       });
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: originOk ? 204 : 403, headers: cors });
     if (!originOk) return json(403, { status: 403, message: `This voice server doesn't accept requests from ${origin || 'unknown sites'}. Add it to ALLOWED_ORIGINS.` });
-    if (request.method !== 'POST' || path !== '/v1/tts') return json(404, { status: 404, message: 'Not found. Send POST /v1/tts.' });
+    if (request.method !== 'POST' || (path !== '/v1/tts' && path !== '/v1/asr')) return json(404, { status: 404, message: 'Not found. Send POST /v1/tts or /v1/asr.' });
 
     const key = env.FISH_API_KEY || (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
     if (!key) return json(401, { status: 401, message: 'No Fish Audio API key. Add FISH_API_KEY to this server, or paste a key in Nova → Settings → Speech.' });
+
+    // Speech to text: the body is the raw recording (Nova sends 16 kHz WAV).
+    if (path === '/v1/asr') {
+      const type = (request.headers.get('Content-Type') || 'audio/wav').split(';')[0].trim();
+      if (!/^audio\/|^video\/|^application\/octet-stream$/.test(type)) return json(415, { status: 415, message: 'Send the recording as the request body with an audio/* Content-Type.' });
+      const audio = await request.arrayBuffer();
+      const maxBytes = (Number(env.MAX_AUDIO_MB) || 8) * 1024 * 1024;
+      if (!audio.byteLength) return json(400, { status: 400, message: 'The recording is empty.' });
+      if (audio.byteLength > maxBytes) return json(413, { status: 413, message: 'The recording is too long.' });
+      const ext = /wav/.test(type) ? 'wav' : /mpeg|mp3/.test(type) ? 'mp3' : /mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /webm/.test(type) ? 'webm' : 'wav';
+      const form = new FormData();
+      form.append('audio', new Blob([audio], { type }), `speech.${ext}`);
+      const lang = (url.searchParams.get('language') || '').toLowerCase();
+      if (/^[a-z]{2}$/.test(lang)) form.append('language', lang);
+      form.append('ignore_timestamps', 'true');
+      const asrModel = request.headers.get('model') === 'transcribe-1-pro' ? 'transcribe-1-pro' : 'transcribe-1';
+      let upstream;
+      try {
+        upstream = await fetch('https://api.fish.audio/v1/asr', { method: 'POST', headers: { Authorization: `Bearer ${key}`, model: asrModel }, body: form });
+      } catch {
+        return json(502, { status: 502, message: "Couldn't reach Fish Audio." });
+      }
+      const headers = new Headers(cors);
+      headers.set('Content-Type', upstream.headers.get('Content-Type') || 'application/json');
+      headers.set('Cache-Control', 'no-store');
+      return new Response(upstream.body, { status: upstream.status, headers });
+    }
 
     let body;
     try { body = await request.json(); } catch { return json(400, { status: 400, message: 'Expected a JSON body.' }); }
