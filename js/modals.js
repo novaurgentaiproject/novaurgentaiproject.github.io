@@ -3,11 +3,13 @@
 import { esc, h, download, copyText, relDay, truncate, uid, deflate, bytesToB64url, formatBytes, fileExt, isMac } from './util.js';
 import { icon, hydrateIcons } from './icons.js';
 import { openModal, toast, confirmDialog, lightbox, promptDialog } from './ui.js';
-import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS, savedWidgets, persistWidgets, removeWidgetState } from './state.js';
+import { settings, saveSettings, memory, removeMemory, clearMemory, chats, deleteAllChats, exportAll, importAll, customAgents, saveAgents, DEFAULT_SETTINGS, savedWidgets, persistWidgets, removeWidgetState, on } from './state.js';
 import { MODELS, CLAUDE_MODELS, EFFORTS, modelGradient } from './models.js';
 import { testKey } from './engines/claude.js';
 import { listVoices, speak, canSpeak, unlockSpeech, pickVoice, usingFish, fishConfigured, fishProblem, fishVoiceLabel, checkVoiceServer, JAMES_VOICE_ID, DEFAULT_VOICE_SERVER, VOICE_SERVER_GUIDE } from './tools/voice.js';
 import { allAgents, BUILTIN_AGENTS } from './agents.js';
+import { accountSettingsHTML, bindAccountSettings, signedIn, syncLine, logOut } from './account.js';
+import { syncState } from './sync.js';
 import { premiumSettingsHTML, bindPremiumSettings, needsPremium, modelLocked, requireModel } from './premium.js';
 import { renderMarkdown } from './markdown.js';
 import { highlight } from './highlight.js';
@@ -23,15 +25,25 @@ const switchHTML = (key, on) => `<label class="switch"><input type="checkbox" da
 // ---------------------------------------------------------------------------
 export function openSettings(app, tab = 'general') {
   const tabs = [
-    ['general', 'settings', 'General'], ['engine', 'cpu', 'Engine & models'], ['personal', 'user', 'Personalization'],
+    ['general', 'settings', 'General'], ['account', 'user', 'Account'], ['engine', 'cpu', 'Engine & models'], ['personal', 'user', 'Personalization'],
     ['speech', 'volume', 'Speech'], ['premium', 'crown', 'Premium'], ['data', 'table', 'Data controls'], ['about', 'info', 'About Nova'],
   ];
   const body = h(`<div class="settings"><nav class="settings-tabs">${tabs.map(([k, ic, l]) => `<button data-tab="${k}">${icon(ic, 'icon-sm')}${l}</button>`).join('')}</nav><div class="settings-panel"></div></div>`);
-  const m = openModal({ title: 'Settings', body, size: 'wide', className: 'settings-modal' });
+  let currentTab = tab;
+  // Keep the Account tab live while it's open (login state and sync status).
+  const offs = [
+    on('account', () => { if (currentTab === 'account' && panel.isConnected) show('account'); }),
+    on('sync', () => {
+      const line = currentTab === 'account' && panel.querySelector('[data-syncline]');
+      if (line) { line.textContent = syncLine(); line.className = `s-help acct-sync ${syncState.status}`; }
+    }),
+  ];
+  const m = openModal({ title: 'Settings', body, size: 'wide', className: 'settings-modal', onClose: () => offs.forEach((off) => off()) });
   m.body.style.padding = '0';
   m.body.style.display = 'flex';
   const panel = body.querySelector('.settings-panel');
   const show = (t) => {
+    currentTab = t;
     body.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
     panel.innerHTML = PANELS[t]();
     hydrateIcons(panel);
@@ -96,6 +108,7 @@ ${fish ? `<div class="setting col voice-server">
 <div class="setting"><div><div class="s-label">Test voice</div></div><button class="btn sm" data-testvoice ${canSpeak ? '' : 'disabled'}>${icon('volume', 'icon-sm')} Play sample</button></div>`;
     },
     premium: () => premiumSettingsHTML(),
+    account: () => accountSettingsHTML(),
     data: () => `
 <div class="setting"><div><div class="s-label">Export data</div><div class="s-help">Download all chats, memories and agents as JSON (your API key is not included).</div></div><button class="btn sm" data-export>${icon('download', 'icon-sm')} Export</button></div>
 <div class="setting"><div><div class="s-label">Import data</div><div class="s-help">Restore from a Nova export file.</div></div><button class="btn sm" data-import>${icon('upload', 'icon-sm')} Import</button></div>
@@ -127,6 +140,7 @@ ${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;alig
       saveSettings({ model: id });
       app.applySettings();
     };
+    if (t === 'account') bindAccountSettings(panel, () => { if (panel.isConnected) show('account'); });
     if (t === 'premium') bindPremiumSettings(panel, () => { if (panel.isConnected) show('premium'); });
     if (t === 'engine') {
       panel.querySelectorAll('[data-engine]').forEach((b) => (b.onclick = () => {
@@ -214,12 +228,14 @@ ${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;alig
         inp.click();
       };
       panel.querySelector('[data-delchats]').onclick = async () => {
-        if (await confirmDialog({ title: 'Delete all chats?', text: 'This permanently deletes every conversation stored in this browser.', confirm: 'Delete all', danger: true })) { await deleteAllChats(); app.newChat(); toast('All chats deleted'); show('data'); }
+        if (await confirmDialog({ title: 'Delete all chats?', text: signedIn() ? 'This permanently deletes every conversation in your account, on all your devices.' : 'This permanently deletes every conversation stored in this browser.', confirm: 'Delete all', danger: true })) { await deleteAllChats(); app.newChat(); toast('All chats deleted'); show('data'); }
       };
       panel.querySelector('[data-reset]').onclick = async () => {
-        if (await confirmDialog({ title: 'Reset Nova?', text: 'Settings, API key, memory, agents and all chats will be removed from this browser.', confirm: 'Reset', danger: true })) {
-          await deleteAllChats();
-          ['nova:settings', 'nova:memory', 'nova:agents'].forEach((k) => localStorage.removeItem(k));
+        const acct = signedIn();
+        if (await confirmDialog({ title: 'Reset Nova?', text: `Settings, API key, memory, agents and all chats will be removed from this browser.${acct ? ' You\'ll be logged out; your account and everything synced to it stay safe.' : ''}`, confirm: 'Reset', danger: true })) {
+          if (acct) await logOut({ force: true }); // so the reset only affects this device, not the account
+          await deleteAllChats({ sync: false });
+          ['nova:settings', 'nova:memory', 'nova:agents', 'nova:sync-groups'].forEach((k) => localStorage.removeItem(k));
           location.reload();
         }
       };

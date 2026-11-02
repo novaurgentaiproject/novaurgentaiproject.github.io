@@ -44,7 +44,8 @@ export function on(evt, fn) {
   return () => listeners.get(evt).delete(fn);
 }
 export function emit(evt, data) {
-  listeners.get(evt)?.forEach((fn) => { try { fn(data); } catch (e) { console.error(e); } });
+  // Copy first: a listener that subscribes another must not run it in this same pass.
+  [...(listeners.get(evt) || [])].forEach((fn) => { try { fn(data); } catch (e) { console.error(e); } });
 }
 
 // ---------- settings ----------
@@ -90,6 +91,8 @@ export function removeMemory(id) {
   emit('memory', memory);
 }
 export function clearMemory() { memory.length = 0; saveJSON(LS_MEMORY, memory); emit('memory', memory); }
+/** Replace all memories (used by account sync). */
+export function setMemory(list) { memory.length = 0; memory.push(...(list || [])); saveJSON(LS_MEMORY, memory); emit('memory', memory); }
 
 // ---------- custom agents ----------
 export const customAgents = loadJSON(LS_AGENTS, []);
@@ -153,10 +156,12 @@ export async function loadChats() {
 }
 
 const pendingSaves = new Map();
-export function saveChat(chat, immediate = false) {
+// `sync: false` is for changes that came from the account (cloud sync), so they aren't sent back.
+export function saveChat(chat, immediate = false, { sync = true } = {}) {
   if (!chat || chat.temporary) return;
   chat.updatedAt = chat.updatedAt || Date.now();
   chats.set(chat.id, chat);
+  if (sync) { chat.rev = Date.now(); emit('chat-saved', chat); }
   clearTimeout(pendingSaves.get(chat.id));
   const run = async () => {
     pendingSaves.delete(chat.id);
@@ -172,15 +177,21 @@ export function saveChat(chat, immediate = false) {
   pendingSaves.set(chat.id, setTimeout(run, 400));
 }
 
-export async function deleteChat(id) {
+export async function deleteChat(id, { sync = true } = {}) {
   chats.delete(id);
+  clearTimeout(pendingSaves.get(id));
+  pendingSaves.delete(id);
+  if (sync) emit('chat-deleted', id);
   const db = await openDB();
   if (db) { try { await tx(db, 'readwrite', (s) => s.delete(id)); } catch {} }
   else saveJSON('nova:chats', [...chats.values()]);
   emit('chats');
 }
 
-export async function deleteAllChats() {
+export async function deleteAllChats({ sync = true } = {}) {
+  if (sync) for (const id of chats.keys()) emit('chat-deleted', id);
+  for (const t of pendingSaves.values()) clearTimeout(t);
+  pendingSaves.clear();
   chats.clear();
   const db = await openDB();
   if (db) { try { await tx(db, 'readwrite', (s) => s.clear()); } catch {} }

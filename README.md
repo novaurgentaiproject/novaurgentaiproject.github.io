@@ -17,12 +17,19 @@ Nova is an AI assistant that runs entirely as a static website, so it can be hos
 
 You can change which Claude model and effort level each Nova model uses in **Settings → Engine & models**.
 
+## Accounts
+
+People can **log in with Google, Apple, or an email and password**. A logged-in account keeps chats, memory, custom agents, personalization and Premium in sync across all their devices. API keys and device settings never leave the device, and Nova still works without an account.
+
+Accounts run on Firebase (free Spark plan). [Set them up in about 10 minutes](accounts/README.md); until then, the Log in screen says accounts are coming soon. **Settings → Account** shows the account and sync status, and has options to change the name or password, log out, or delete the account.
+
 ## Nova Premium
 
 Nova 3 Martia needs **Nova Premium**; the other five models are free. Free users see Martia with a lock, and an **Upgrade** button opens the Premium screen. Built-in agents that use Martia run on Nova 2 Flash for free users.
 
 - **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small free Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
 - **Premium codes:** unlock Premium for yourself, friends or testers, with or without the server.
+- **With accounts on**, buying Premium asks people to log in first, and Premium is saved to their account.
 - **Settings → Premium:** shows the membership, the Premium key for other devices (and the Home Screen app), **Manage subscription** (Stripe's billing page), and code entry.
 
 The lock runs in the browser, so it stops normal visitors but not someone who edits the page's code. See [Good to know](premium-server/README.md#good-to-know).
@@ -80,6 +87,9 @@ sw.js                 offline service worker
 voice-server/         Cloudflare Worker that relays speech to and from Fish Audio (James's voice, listening)
 premium-server/       Cloudflare Worker that confirms Nova Premium purchases with Stripe
 js/premium.js         Nova Premium: the Martia lock, Upgrade screen, codes and membership checks
+js/account.js         Accounts: log in with Google, Apple or email (Firebase Authentication)
+js/sync.js            Account sync of chats, memory, agents, personalization and Premium (Firestore)
+accounts/             Firebase setup guide and Firestore security rules
 ```
 
 ## Privacy
@@ -89,4 +99,5 @@ js/premium.js         Nova Premium: the Martia lock, Upgrade screen, codes and m
 - Nova Cloud image prompts go to Pollinations.ai. Switch to **Nova Studio** in Settings to keep image generation on-device.
 - With Claude connected, messages go directly to Anthropic's API under your key.
 - With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.
+- Accounts (when logged in): chats, memory, custom agents, personalization and Premium are stored in Firebase under your account, readable only by you. API keys stay on your device.
 - Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends only that key to the premium server to confirm your membership.

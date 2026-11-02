@@ -204,6 +204,24 @@ export function startPremiumChecks() {
 
 export function removePremium() { save(null); }
 
+/** What an account stores so Premium follows the person to their other devices. */
+export function exportPremium() {
+  if (!isPremium() || !state) return null;
+  return state.kind === 'code' ? { kind: 'code', codeHash: state.codeHash } : { kind: state.kind, key: state.key };
+}
+
+/** Unlock Premium from what the account stored. Returns true if it worked. */
+export async function importPremium(data) {
+  if (!data || isPremium()) return false;
+  if (data.kind === 'code') {
+    if (!OFFLINE_CODES.includes(data.codeHash)) return false;
+    save({ active: true, kind: 'code', codeHash: data.codeHash, since: Date.now(), checkedAt: Date.now() });
+    return true;
+  }
+  if (!data.key) return false;
+  try { await redeem(data.key); return true; } catch { return false; }
+}
+
 /** Price and checkout link for the Premium plan, from the server (cached for 30 minutes). */
 export async function loadPlan({ fresh = false } = {}) {
   const cached = read(LS_PLAN);
@@ -283,7 +301,17 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
       const parts = priceParts(plan);
       $('[data-plan]').innerHTML = `${parts ? `<div class="pm-price"><b>${esc(parts.money)}</b><span>${esc(parts.per)}</span></div>` : '<div class="pm-price"><span>Choose your price at checkout</span></div>'}${plan.trialDays ? `<div class="pm-trial">${plan.trialDays}-day free trial</div>` : ''}`;
       buy.hidden = false;
-      buy.onclick = () => { buy.disabled = true; buy.innerHTML = `${icon('refresh', 'icon-sm spin')} Opening checkout…`; location.href = plan.url; };
+      const go = () => {
+        buy.disabled = true;
+        buy.innerHTML = `${icon('refresh', 'icon-sm spin')} Opening checkout…`;
+        // Logged-in buyers: Stripe pre-fills their email and records their account ID.
+        const extra = hooks.checkoutParams?.() || {};
+        const u = new URL(plan.url);
+        for (const [k, v] of Object.entries(extra)) if (v) u.searchParams.set(k, v);
+        location.href = u.href;
+      };
+      // When accounts are on, Premium belongs to an account, so log in first.
+      buy.onclick = () => { if (!hooks.requireAccount || hooks.requireAccount(go, 'Log in or sign up to get Premium. It stays with your account on every device.')) go(); };
       $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}`;
     } else {
       $('[data-plan]').innerHTML = `<div class="pm-soon">${icon('clock', 'icon-sm')}<span>Premium sign-ups aren't open yet. If you have a Premium code, enter it below.</span></div>`;

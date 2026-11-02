@@ -15,6 +15,7 @@ import { readAttachment, buildFile, describeAttachment, fileBadge } from './tool
 import { cleanImagePrompt } from './tools/imagegen.js';
 import { openCanvas, closeCanvas, isCanvasOpen } from './tools/canvas.js';
 import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, unlockSpeech, formatDuration } from './tools/voice.js';
+import { initAccounts, signedIn, currentUser, openLogin, confirmLogOut, accountAvatar, requireAccount, checkoutParams } from './account.js';
 import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS } from './premium.js';
 
 const S = {
@@ -35,7 +36,7 @@ const els = {
   attachRow: $('#attach-row'), toolSlot: $('#tool-slot'), send: $('#send-btn'), stop: $('#stop-btn'), voice: $('#voice-btn'), dictate: $('#dictate-btn'),
   plus: $('#plus-btn'), modelBtn: $('#model-btn'), modelName: $('#model-name'), engineTag: $('#engine-tag'), shareBtn: $('#share-btn'), tempBtn: $('#temp-btn'),
   chatMenuBtn: $('#chat-menu-btn'), hero: $('#home-hero'), suggest: $('#home-suggest'), chatList: $('#chat-list'), agentShortcuts: $('#agent-shortcuts'),
-  scrollDown: $('#scroll-down'), upgrade: $('#upgrade-btn'), recorder: $('#recorder'), fileInput: $('#file-input'), drop: $('#drop-overlay'), shareBanner: $('#share-banner'),
+  scrollDown: $('#scroll-down'), upgrade: $('#upgrade-btn'), login: $('#login-btn'), signup: $('#signup-btn'), recorder: $('#recorder'), fileInput: $('#file-input'), drop: $('#drop-overlay'), shareBanner: $('#share-banner'),
 };
 
 // Home Screen app: remember the open chat so relaunching resumes it.
@@ -86,6 +87,7 @@ function updateTopbar() {
   els.modelBtn.classList.toggle('locked', locked && !agent);
   els.modelBtn.title = locked ? `${m.name} needs Nova Premium` : '';
   if (els.upgrade) els.upgrade.hidden = isPremium();
+  els.login.hidden = els.signup.hidden = signedIn();
   const has = !!S.chat?.messages.length;
   els.shareBtn.hidden = !has || S.chat?.temporary || !!S.shared;
   els.chatMenuBtn.hidden = !has || !!S.shared;
@@ -102,9 +104,12 @@ function updateEngineCard() {
 }
 
 function updateProfile() {
-  const name = settings.name || 'You';
-  $('#profile-avatar').textContent = (name.trim()[0] || 'N').toUpperCase();
+  const user = currentUser();
+  const name = settings.name || user?.name || (user?.email ? user.email.split('@')[0] : '') || 'You';
+  const av = $('#profile-avatar');
+  av.outerHTML = accountAvatar(user ? { ...user, name } : { name }, 'avatar').replace('<span class="avatar', '<span id="profile-avatar" class="avatar');
   $('#profile-name').textContent = name;
+  $('#profile-btn').title = user?.email || '';
   $('#profile-sub').textContent = `${isPremium() ? 'Nova Premium' : 'Nova Free'} · ${engineReady() ? 'Claude' : 'on-device'}`;
   $('#profile-btn').classList.toggle('premium', isPremium());
 }
@@ -680,7 +685,8 @@ function chatMenu() {
 
 function profileMenu(btn) {
   openMenu(btn, [
-    { header: settings.name || 'Nova' },
+    { header: currentUser()?.email || settings.name || 'Nova' },
+    ...(signedIn() ? [] : [{ icon: 'user', label: 'Log in or sign up', desc: 'Save your chats to an account', onClick: () => openLogin() }]),
     isPremium()
       ? { icon: 'crown', label: 'Nova Premium', desc: planLine(premiumInfo()), onClick: () => openSettings(api, 'premium') }
       : { icon: 'crown', label: 'Upgrade to Premium', desc: `Unlock ${getModel(PREMIUM_MODELS[0]).name}`, onClick: () => openPremium() },
@@ -690,6 +696,7 @@ function profileMenu(btn) {
     { icon: resolvedTheme() === 'dark' ? 'sun' : 'moon', label: resolvedTheme() === 'dark' ? 'Daylight theme' : 'Midnight theme', onClick: () => { saveSettings({ theme: resolvedTheme() === 'dark' ? 'light' : 'dark' }); applySettings(); } },
     { icon: 'keyboard', label: 'Keyboard shortcuts', onClick: openShortcuts },
     { icon: 'help', label: 'Help & tips', onClick: () => send('What can you do?') },
+    ...(signedIn() ? [{ sep: true }, { icon: 'logout', label: 'Log out', onClick: () => confirmLogOut() }] : []),
   ], { placement: 'top' });
 }
 
@@ -817,6 +824,8 @@ const ACTIONS = {
   },
   'open-settings': (el) => openSettings(api, el.dataset.tab || 'general'),
   upgrade: () => openPremium(),
+  login: () => openLogin(),
+  signup: () => openLogin({ mode: 'signup' }),
   'profile-menu': (el) => profileMenu(el),
   'share-chat': () => S.chat && openShare(api, S.chat),
   'chat-menu': () => chatMenu(),
@@ -1072,6 +1081,21 @@ on('premium', () => {
 });
 on('settings', () => {});
 
+// Accounts: logging in, out, and changes synced from other devices.
+on('account', () => {
+  if (S.chat?.messages.length && !S.chat.temporary && !chats.has(S.chat.id) && !S.shared) newChat(); // logged out: its chats left this device
+  renderSidebar();
+  updateTopbar();
+  updateProfile();
+});
+on('synced', ({ changed }) => {
+  renderSidebar();
+  if (!S.chat || !changed.includes(S.chat.id) || S.streaming?.chatId === S.chat.id) return;
+  const c = chats.get(S.chat.id);
+  if (!c) { newChat(); return; }
+  if (c !== S.chat) { S.chat = c; renderThread(); updateTopbar(); }
+});
+
 // ---------------------------------------------------------------------------
 // PWA
 // ---------------------------------------------------------------------------
@@ -1106,7 +1130,8 @@ async function boot() {
     const id = new URLSearchParams(hash).get('c') || (STANDALONE ? lastChatId() : null);
     if (id && chats.has(id)) openChat(id); else newChat();
   }
-  setPremiumHooks({ selectModel });
+  setPremiumHooks({ selectModel, requireAccount, checkoutParams });
+  initAccounts();
   const q = new URLSearchParams(location.search).get('q');
   if (!handleCheckoutReturn() && q) { history.replaceState(null, '', location.pathname + location.hash); send(q); }
   startPremiumChecks();

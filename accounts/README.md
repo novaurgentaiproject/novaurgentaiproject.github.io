@@ -1,0 +1,78 @@
+# Nova accounts (Firebase)
+
+Nova accounts let people **log in with Google, Apple, or an email and password**. Once logged in, Nova keeps these the same on every device they use:
+
+- chats
+- memory
+- custom agents
+- personalization (name, about you, style, personality)
+- Nova Premium
+
+API keys (Claude, Fish Audio) and device settings such as theme and voice never leave the device. Nova still works without an account; everything then stays on that device.
+
+Accounts run on [Firebase](https://firebase.google.com): Firebase Authentication for logging in, and Cloud Firestore to store each account's data. The free Spark plan is enough for a small community.
+
+Until Firebase is connected, Nova's **Log in** screen says accounts are coming soon.
+
+## 1. Create a Firebase project
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) and click **Create a project** (Google Analytics isn't needed).
+2. In the project, open **Project settings** (the gear) → **General** → **Your apps**, and click the **Web** icon (`</>`). Name it `Nova`, leave Firebase Hosting unticked, and click **Register app**.
+3. Copy the `firebaseConfig` values it shows: `apiKey`, `authDomain`, `projectId` and `appId`.
+
+## 2. Turn on the ways to log in
+
+In **Build → Authentication → Get started → Sign-in method**:
+
+- **Email/Password:** enable the first switch (not "Email link") and save.
+- **Google:** enable it, choose a support email and save.
+- **Apple:** needs a paid [Apple Developer Program](https://developer.apple.com/programs/) membership. In your Apple Developer account:
+  1. Create an **App ID** with **Sign in with Apple** turned on.
+  2. Create a **Services ID** (for example `io.github.novaurgentaiproject.signin`). Turn on **Sign in with Apple** for it, and set:
+     - Domain: `YOUR-PROJECT-ID.firebaseapp.com`
+     - Return URL: `https://YOUR-PROJECT-ID.firebaseapp.com/__/auth/handler`
+  3. Create a **Key** with **Sign in with Apple** turned on, and download it.
+  4. Back in Firebase, enable **Apple** and enter the Services ID, your Apple Team ID, the Key ID and the private key.
+
+  To skip Apple, remove `'apple'` from `SIGN_IN_METHODS` in [`js/account.js`](../js/account.js) so the button doesn't show.
+
+Then, in **Authentication → Settings → Authorized domains**, click **Add domain** and add `novaurgentaiproject.github.io`.
+
+## 3. Create the database
+
+1. Open **Build → Firestore Database → Create database**. Pick a location near your users and choose **production mode**.
+2. Open the **Rules** tab, replace everything with the contents of [`firestore.rules`](firestore.rules), and click **Publish**.
+
+The rules let each person read and write only their own data.
+
+## 4. Connect Nova
+
+Put your config into `FIREBASE_CONFIG` near the top of [`js/account.js`](../js/account.js) and push the change:
+
+```js
+export const FIREBASE_CONFIG = {
+  apiKey: 'AIza…',
+  authDomain: 'your-project-id.firebaseapp.com',
+  projectId: 'your-project-id',
+  appId: '1:…:web:…',
+};
+```
+
+These values aren't secret. They only identify your Firebase project; the security rules are what protect people's data. For extra safety, restrict the API key to your site in the [Google Cloud console](https://console.cloud.google.com/apis/credentials). Edit the "Browser key", choose **Websites** and add `https://novaurgentaiproject.github.io/*`.
+
+Open Nova, tap **Sign up**, and create an account to try it.
+
+## How it works
+
+- **Logging in on a new device** downloads the account's chats and data. Anything already on the device is added to the account.
+- **Changes sync** a couple of seconds after they happen, and Nova checks for changes from other devices when it opens, when you come back to it, and every 2 minutes. If two devices change the same chat, the most recent change wins.
+- **Logging out** removes the account's chats, memory, agents and Premium from that device. They stay safe in the account. If some changes haven't been saved to the account yet (for example, while offline), Nova asks before logging out.
+- **Deleting an account** asks the person to confirm with their password, Google or Apple. It then deletes everything stored for the account, and the account itself.
+- **Premium:** when accounts are on, Nova asks people to log in before buying Premium. Their email is pre-filled at checkout and their Premium is saved to their account, so it unlocks on all their devices, including Nova on their Home Screen. Deleting an account doesn't cancel a Stripe subscription; Nova reminds people to cancel first.
+
+## Good to know
+
+- **Google and Apple open a pop-up window.** In Nova added to the Home Screen on iPhone and iPad, iOS often blocks these pop-ups. Nova then suggests logging in with email, which works everywhere.
+- **Very large chats don't sync.** Each chat is compressed, and must be under about 900 KB. Big images and files inside chats aren't uploaded (the conversation text is). **Settings → Account** shows if a chat is too big to sync.
+- **Emails** (confirming an address and resetting a password) come from `noreply@YOUR-PROJECT-ID.firebaseapp.com`. Change their wording under **Authentication → Templates**.
+- **Free plan limits:** the Spark plan allows 50,000 reads and 20,000 writes a day and 1 GiB of storage. Nova only reads what changed since the last sync, so this goes a long way.
