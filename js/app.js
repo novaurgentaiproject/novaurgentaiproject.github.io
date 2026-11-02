@@ -15,6 +15,7 @@ import { readAttachment, buildFile, describeAttachment, fileBadge } from './tool
 import { cleanImagePrompt } from './tools/imagegen.js';
 import { openCanvas, closeCanvas, isCanvasOpen } from './tools/canvas.js';
 import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, unlockSpeech, formatDuration } from './tools/voice.js';
+import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS } from './premium.js';
 
 const S = {
   chat: null,
@@ -34,7 +35,7 @@ const els = {
   attachRow: $('#attach-row'), toolSlot: $('#tool-slot'), send: $('#send-btn'), stop: $('#stop-btn'), voice: $('#voice-btn'), dictate: $('#dictate-btn'),
   plus: $('#plus-btn'), modelBtn: $('#model-btn'), modelName: $('#model-name'), engineTag: $('#engine-tag'), shareBtn: $('#share-btn'), tempBtn: $('#temp-btn'),
   chatMenuBtn: $('#chat-menu-btn'), hero: $('#home-hero'), suggest: $('#home-suggest'), chatList: $('#chat-list'), agentShortcuts: $('#agent-shortcuts'),
-  scrollDown: $('#scroll-down'), recorder: $('#recorder'), fileInput: $('#file-input'), drop: $('#drop-overlay'), shareBanner: $('#share-banner'),
+  scrollDown: $('#scroll-down'), upgrade: $('#upgrade-btn'), recorder: $('#recorder'), fileInput: $('#file-input'), drop: $('#drop-overlay'), shareBanner: $('#share-banner'),
 };
 
 // Home Screen app: remember the open chat so relaunching resumes it.
@@ -79,8 +80,12 @@ function currentModelId() { return S.chat?.model || settings.model; }
 function updateTopbar() {
   const m = getModel(currentModelId());
   const agent = getAgent(S.chat?.agentId);
+  const locked = modelLocked(m.id);
   els.modelName.textContent = agent ? `${agent.name}` : m.name;
-  els.engineTag.textContent = agent ? m.name : engineReady() ? 'Claude' : 'On-device';
+  els.engineTag.textContent = agent ? m.name : locked ? 'Premium' : engineReady() ? 'Claude' : 'On-device';
+  els.modelBtn.classList.toggle('locked', locked && !agent);
+  els.modelBtn.title = locked ? `${m.name} needs Nova Premium` : '';
+  if (els.upgrade) els.upgrade.hidden = isPremium();
   const has = !!S.chat?.messages.length;
   els.shareBtn.hidden = !has || S.chat?.temporary || !!S.shared;
   els.chatMenuBtn.hidden = !has || !!S.shared;
@@ -100,7 +105,8 @@ function updateProfile() {
   const name = settings.name || 'You';
   $('#profile-avatar').textContent = (name.trim()[0] || 'N').toUpperCase();
   $('#profile-name').textContent = name;
-  $('#profile-sub').textContent = engineReady() ? 'Nova + Claude' : 'Nova · on-device';
+  $('#profile-sub').textContent = `${isPremium() ? 'Nova Premium' : 'Nova Free'} · ${engineReady() ? 'Claude' : 'on-device'}`;
+  $('#profile-btn').classList.toggle('premium', isPremium());
 }
 
 function updatePlaceholder() {
@@ -189,7 +195,7 @@ function newChat({ agentId = null, temporary = false } = {}) {
   els.shareBanner.hidden = true;
   const agent = getAgent(agentId);
   S.chat = makeChat({ agentId, temporary });
-  S.chat.model = agent?.model || settings.model;
+  S.chat.model = usableModel(agent?.model || settings.model);
   S.tool = agent?.tool || null;
   S.attachments = [];
   renderAttachments();
@@ -278,6 +284,13 @@ async function send(text, { tool = S.tool, attachments = null, voice = null } = 
   if (!voice && S.attachments.some((a) => a.loading)) { bail('Still reading your attachment…'); return; }
   if (!text && !atts.length) { bail(''); return; }
   if (S.streaming) { bail('Nova is still responding — stop it first or wait a moment.'); return; }
+  const modelId = (S.shared || S.chat)?.model || settings.model;
+  if (modelLocked(modelId)) {
+    if (voice) { bail(`${getModel(modelId).name} is part of Nova Premium. Switch models or upgrade to keep talking.`); return; }
+    const again = () => send(text, { tool, attachments });
+    requireModel(modelId, { onUnlock: again, onFallback: () => { useFreeModel(); again(); } });
+    return;
+  }
   if (S.shared) await continueShared();
   stopDictation();
   stopSpeaking();
@@ -323,6 +336,7 @@ async function generate(chat, msg, userMsg, tool = userMsg.tool, { voice = null 
   draw();
   try {
     const update = voice ? () => { draw(); voice.onPartial?.(version.content, { engine: version.engine }); } : draw;
+    if (modelLocked(msg.model)) throw new Error(`${getModel(msg.model).name} is part of Nova Premium. Upgrade, or pick another model to continue.`);
     await respond({ chat, userMsg, msg, version, tool, agent: getAgent(chat.agentId), signal: ctrl.signal, update, voice: !!voice });
   } catch (e) {
     if (e?.name === 'AbortError') version.notice = { type: 'info', text: 'Response stopped.' };
@@ -365,6 +379,7 @@ async function regenerate(msg, modelId = null) {
   const i = chat.messages.indexOf(msg);
   const userMsg = chat.messages[i - 1];
   if (!userMsg) return;
+  if (!requireModel(modelId || msg.model, { onUnlock: () => regenerate(msg, modelId), onFallback: () => regenerate(msg, FREE_MODEL) })) return;
   if (modelId) msg.model = modelId;
   msg.versions.push(newVersion(msg.model));
   msg.active = msg.versions.length - 1;
@@ -389,6 +404,7 @@ function editUserMessage(msg) {
     const t = ta.value.trim();
     if (!t) return;
     const chat = S.chat;
+    if (!requireModel(chat.model, { onUnlock: ok, onFallback: () => { useFreeModel(); ok(); } })) return;
     const i = chat.messages.indexOf(msg);
     chat.messages.splice(i + 1);
     msg.content = t;
@@ -545,6 +561,7 @@ window.addEventListener('nova-voice-problem', (e) => {
 });
 
 function startVoiceMode() {
+  if (!requireModel(currentModelId(), { onFallback: () => { useFreeModel(); startVoiceMode(); } })) return;
   unlockSpeech(); // must happen inside the tap so iOS lets Nova talk back later
   stopSpeaking();
   const m = getModel(currentModelId());
@@ -582,24 +599,37 @@ function modelMenu() {
   const cur = currentModelId();
   const items = [{ header: 'Nova models' }];
   for (const m of MODELS) {
+    const locked = modelLocked(m.id);
     items.push({
-      html: `<button class="menu-item model-item${m.id === cur ? ' checked' : ''}" role="menuitem"><span class="m-ico" style="background:${modelGradient(m)}">${icon(m.icon, 'icon-sm')}</span><span class="m-body"><span class="m-name">${esc(m.name)}${m.badge ? `<span class="tag new">${esc(m.badge)}</span>` : ''}</span><span class="desc">${esc(m.tagline)}</span><span class="m-tags">${m.tags.map((t) => `<span class="tag accent">${esc(t)}</span>`).join('')}${m.tags.includes(m.speed) ? '' : `<span class="tag">${esc(m.speed)}</span>`}</span></span>${m.id === cur ? `<span class="check">${icon('check', 'icon-sm')}</span>` : ''}</button>`,
+      html: `<button class="menu-item model-item${m.id === cur ? ' checked' : ''}${locked ? ' locked' : ''}" role="menuitem"><span class="m-ico" style="background:${modelGradient(m)}">${icon(m.icon, 'icon-sm')}</span><span class="m-body"><span class="m-name">${esc(m.name)}${needsPremium(m.id) ? `<span class="tag premium">${icon('crown', 'icon-xs')}Premium</span>` : m.badge ? `<span class="tag new">${esc(m.badge)}</span>` : ''}</span><span class="desc">${esc(m.tagline)}</span><span class="m-tags">${m.tags.map((t) => `<span class="tag accent">${esc(t)}</span>`).join('')}${m.tags.includes(m.speed) ? '' : `<span class="tag">${esc(m.speed)}</span>`}</span></span>${locked ? `<span class="check lock" title="Needs Nova Premium">${icon('lock', 'icon-sm')}</span>` : m.id === cur ? `<span class="check">${icon('check', 'icon-sm')}</span>` : ''}</button>`,
       onClick: () => selectModel(m.id),
     });
   }
   items.push({ sep: true });
+  if (!isPremium()) items.push({ icon: 'crown', label: 'Upgrade to Nova Premium', desc: `Unlock ${getModel(PREMIUM_MODELS[0]).name}`, onClick: () => openPremium() });
   items.push({ icon: engineReady() ? 'sparkles' : 'cpu', label: engineReady() ? 'Engine: Claude' : 'Engine: On-device', desc: engineReady() ? 'Change models or effort in settings' : 'Connect Claude for full intelligence', onClick: () => openSettings(api, 'engine') });
   items.push({ icon: 'grid', label: 'Explore Nova Agents', onClick: () => openAgents(api) });
   openMenu(els.modelBtn, items, { className: 'model-menu' });
 }
 
 function selectModel(id) {
+  if (!requireModel(id, { onUnlock: () => selectModel(id) })) return;
   if (S.chat) S.chat.model = id;
   saveSettings({ model: id });
   if (S.chat?.messages.length) saveChat(S.chat);
   updateTopbar();
   if (!S.chat?.messages.length) renderHome();
   toast(`Switched to ${getModel(id).name}`);
+}
+
+/** Switch the open chat (and new chats) to the free model, after declining Premium. */
+function useFreeModel() {
+  if (S.chat) S.chat.model = FREE_MODEL;
+  if (S.shared) S.shared.model = FREE_MODEL;
+  if (modelLocked(settings.model)) saveSettings({ model: FREE_MODEL });
+  if (S.chat?.messages.length) saveChat(S.chat);
+  updateTopbar();
+  if (!S.chat?.messages.length) renderHome();
 }
 
 function chatItemMenu(btn, chat) {
@@ -651,6 +681,9 @@ function chatMenu() {
 function profileMenu(btn) {
   openMenu(btn, [
     { header: settings.name || 'Nova' },
+    isPremium()
+      ? { icon: 'crown', label: 'Nova Premium', desc: planLine(premiumInfo()), onClick: () => openSettings(api, 'premium') }
+      : { icon: 'crown', label: 'Upgrade to Premium', desc: `Unlock ${getModel(PREMIUM_MODELS[0]).name}`, onClick: () => openPremium() },
     { icon: 'sparkles', label: 'Customize Nova', onClick: () => openSettings(api, 'personal') },
     { icon: 'cpu', label: engineReady() ? 'Engine: Claude' : 'Connect Claude', onClick: () => openSettings(api, 'engine') },
     { icon: 'settings', label: 'Settings', trail: `${isMac ? '⌘' : 'Ctrl'} ,`, onClick: () => openSettings(api) },
@@ -663,7 +696,7 @@ function profileMenu(btn) {
 function messageMoreMenu(btn, msg) {
   const v = msg.versions[msg.active];
   openMenu(btn, [
-    { icon: 'refresh', label: 'Try again with…', submenu: MODELS.map((m) => ({ label: m.name, checked: m.id === msg.model, onClick: () => regenerate(msg, m.id) })) },
+    { icon: 'refresh', label: 'Try again with…', submenu: MODELS.map((m) => ({ label: modelLocked(m.id) ? `${m.name} (Premium)` : m.name, checked: m.id === msg.model, onClick: () => regenerate(msg, m.id) })) },
     { icon: 'newChat', label: 'Branch in new chat', onClick: () => branchFrom(msg) },
     { icon: 'download', label: 'Download as', submenu: [['md', 'Markdown'], ['pdf', 'PDF'], ['docx', 'Word']].map(([f, l]) => ({ label: l, onClick: () => exportMessage(msg, f) })) },
     { icon: 'code', label: 'Open in Canvas', onClick: () => openCanvas({ code: v.content, lang: 'markdown', title: S.chat.title, onAsk: (t) => send(t, { tool: 'canvas' }) }) },
@@ -783,6 +816,7 @@ const ACTIONS = {
     toast(`Saved “${w.title}” to My Widgets`, { action: { label: 'Open', onClick: () => openWidgets(api, w.id) } });
   },
   'open-settings': (el) => openSettings(api, el.dataset.tab || 'general'),
+  upgrade: () => openPremium(),
   'profile-menu': (el) => profileMenu(el),
   'share-chat': () => S.chat && openShare(api, S.chat),
   'chat-menu': () => chatMenu(),
@@ -1027,6 +1061,15 @@ on('artifact', ({ chat, msg }) => {
   if (S.stick) scrollToBottom();
 });
 on('memory', () => {});
+on('premium', () => {
+  // Premium ended: new chats go back to the free model.
+  if (modelLocked(settings.model)) saveSettings({ model: FREE_MODEL });
+  if (S.chat && !S.chat.messages.length && !S.chat.agentId) S.chat.model = usableModel(settings.model);
+  if (S.chat && !S.chat.messages.length && S.chat.agentId) S.chat.model = usableModel(getAgent(S.chat.agentId)?.model || settings.model);
+  updateTopbar();
+  updateProfile();
+  if (!S.chat?.messages.length) renderHome();
+});
 on('settings', () => {});
 
 // ---------------------------------------------------------------------------
@@ -1042,7 +1085,7 @@ function registerSW() {
 // Public API for modals
 // ---------------------------------------------------------------------------
 const api = {
-  newChat, openChat, setTool, send, renderSidebar, applySettings, downloadImage,
+  newChat, openChat, setTool, send, renderSidebar, applySettings, downloadImage, selectModel, openPremium,
   refresh: () => { renderSidebar(); renderThread(); },
 };
 window.nova = api;
@@ -1063,8 +1106,10 @@ async function boot() {
     const id = new URLSearchParams(hash).get('c') || (STANDALONE ? lastChatId() : null);
     if (id && chats.has(id)) openChat(id); else newChat();
   }
+  setPremiumHooks({ selectModel });
   const q = new URLSearchParams(location.search).get('q');
-  if (q) { history.replaceState(null, '', location.pathname + location.hash); send(q); }
+  if (!handleCheckoutReturn() && q) { history.replaceState(null, '', location.pathname + location.hash); send(q); }
+  startPremiumChecks();
   updateComposerState();
   registerSW();
 }

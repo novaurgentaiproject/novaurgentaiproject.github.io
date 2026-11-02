@@ -8,7 +8,7 @@ Nova is an AI assistant that runs entirely as a static website, so it can be hos
 
 | Model | Personality | When Claude is connected |
 |---|---|---|
-| **Nova 3 Martia** *(flagship)* | Deep reasoning, interactive interfaces, research | Claude Opus 5.5 · high effort |
+| **Nova 3 Martia** *(flagship · Premium)* | Deep reasoning, interactive interfaces, research | Claude Opus 5.5 · high effort |
 | **Nova 2.5 Luna** | Creative, expressive, loves making images | Claude Sonnet 5.5 · high |
 | **Nova 2 Flash** *(default)* | Fast, sharp everyday model | Claude Sonnet 5.5 · low |
 | **Nova 1.1 Pro** | Structured, professional, strong at code | Claude Sonnet 5.5 · medium |
@@ -16,6 +16,16 @@ Nova is an AI assistant that runs entirely as a static website, so it can be hos
 | **Nova 1 Flash** | Instant, very concise | Claude Haiku 5.5 · low |
 
 You can change which Claude model and effort level each Nova model uses in **Settings → Engine & models**.
+
+## Nova Premium
+
+Nova 3 Martia needs **Nova Premium**; the other five models are free. Free users see Martia with a lock, and an **Upgrade** button opens the Premium screen. Built-in agents that use Martia run on Nova 2 Flash for free users.
+
+- **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small free Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
+- **Premium codes:** unlock Premium for yourself, friends or testers, with or without the server.
+- **Settings → Premium:** shows the membership, the Premium key for other devices (and the Home Screen app), **Manage subscription** (Stripe's billing page), and code entry.
+
+The lock runs in the browser, so it stops normal visitors but not someone who edits the page's code. See [Good to know](premium-server/README.md#good-to-know).
 
 ## Engines
 
@@ -68,6 +78,8 @@ js/engines/           on-device engine, Claude engine, prompts, knowledge source
 js/tools/             images, files, canvas, AI Mode, research, study, voice, generative UI, Widget Studio
 sw.js                 offline service worker
 voice-server/         Cloudflare Worker that relays speech to and from Fish Audio (James's voice, listening)
+premium-server/       Cloudflare Worker that confirms Nova Premium purchases with Stripe
+js/premium.js         Nova Premium: the Martia lock, Upgrade screen, codes and membership checks
 ```
 
 ## Privacy
@@ -77,3 +89,4 @@ voice-server/         Cloudflare Worker that relays speech to and from Fish Audi
 - Nova Cloud image prompts go to Pollinations.ai. Switch to **Nova Studio** in Settings to keep image generation on-device.
 - With Claude connected, messages go directly to Anthropic's API under your key.
 - With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.
+- Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends only that key to the premium server to confirm your membership.

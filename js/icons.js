@@ -1,6 +1,8 @@
 // Inline SVG icon set (24×24, stroke based).
 const P = {
   plus: '<path d="M12 5v14M5 12h14"/>',
+  crown: '<path d="M3.5 8.5 8 12l4-6.5 4 6.5 4.5-3.5L19 18H5Z"/><path d="M5 21h14"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>',
   arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   arrowDown: '<path d="M12 5v14M19 12l-7 7-7-7"/>',
   arrowRight: '<path d="M5 12h14M13 5l7 7-7 7"/>',

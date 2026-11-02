@@ -1,0 +1,11 @@
+# Deploy with:  npx wrangler deploy        (run inside this folder)
+# Then add your secrets:
+#   npx wrangler secret put STRIPE_SECRET_KEY
+#   npx wrangler secret put PREMIUM_CODES          (optional gift codes)
+name = "nova-premium"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Your Payment Link's ID (plink_…) or address (https://buy.stripe.com/…)
+STRIPE_PAYMENT_LINK = ""

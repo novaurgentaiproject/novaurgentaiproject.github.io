@@ -8,6 +8,7 @@ import { MODELS, CLAUDE_MODELS, EFFORTS, modelGradient } from './models.js';
 import { testKey } from './engines/claude.js';
 import { listVoices, speak, canSpeak, unlockSpeech, pickVoice, usingFish, fishConfigured, fishProblem, fishVoiceLabel, checkVoiceServer, JAMES_VOICE_ID, DEFAULT_VOICE_SERVER, VOICE_SERVER_GUIDE } from './tools/voice.js';
 import { allAgents, BUILTIN_AGENTS } from './agents.js';
+import { premiumSettingsHTML, bindPremiumSettings, needsPremium, modelLocked, requireModel } from './premium.js';
 import { renderMarkdown } from './markdown.js';
 import { highlight } from './highlight.js';
 import { buildFile, parseCSV, fileKindLabel } from './tools/files.js';
@@ -23,7 +24,7 @@ const switchHTML = (key, on) => `<label class="switch"><input type="checkbox" da
 export function openSettings(app, tab = 'general') {
   const tabs = [
     ['general', 'settings', 'General'], ['engine', 'cpu', 'Engine & models'], ['personal', 'user', 'Personalization'],
-    ['speech', 'volume', 'Speech'], ['data', 'table', 'Data controls'], ['about', 'info', 'About Nova'],
+    ['speech', 'volume', 'Speech'], ['premium', 'crown', 'Premium'], ['data', 'table', 'Data controls'], ['about', 'info', 'About Nova'],
   ];
   const body = h(`<div class="settings"><nav class="settings-tabs">${tabs.map(([k, ic, l]) => `<button data-tab="${k}">${icon(ic, 'icon-sm')}${l}</button>`).join('')}</nav><div class="settings-panel"></div></div>`);
   const m = openModal({ title: 'Settings', body, size: 'wide', className: 'settings-modal' });
@@ -43,7 +44,7 @@ export function openSettings(app, tab = 'general') {
 <div class="setting"><div><div class="s-label">Theme</div><div class="s-help">Midnight (deep blue & violet) or Daylight.</div></div>
 <div class="seg" data-seg="theme">${[['dark', 'moon', 'Midnight'], ['light', 'sun', 'Daylight'], ['system', 'monitor', 'System']].map(([v, ic, l]) => `<button data-v="${v}" class="${settings.theme === v ? 'active' : ''}">${icon(ic, 'icon-sm')}${l}</button>`).join('')}</div></div>
 <div class="setting"><div><div class="s-label">Text size</div></div><div class="seg" data-seg="fontScale">${[[0.92, 'Small'], [1, 'Default'], [1.08, 'Large']].map(([v, l]) => `<button data-v="${v}" class="${+settings.fontScale === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-<div class="setting"><div><div class="s-label">Default model</div><div class="s-help">Used for new chats.</div></div><select class="field" data-sel="model">${MODELS.map((x) => `<option value="${x.id}"${x.id === settings.model ? ' selected' : ''}>${x.name}</option>`).join('')}</select></div>
+<div class="setting"><div><div class="s-label">Default model</div><div class="s-help">Used for new chats.</div></div><select class="field" data-sel="model">${MODELS.map((x) => `<option value="${x.id}"${x.id === settings.model ? ' selected' : ''}>${x.name}${modelLocked(x.id) ? ' (Premium)' : ''}</option>`).join('')}</select></div>
 <div class="setting"><div><div class="s-label">Enter to send</div><div class="s-help">When off, use ${isMac ? '⌘' : 'Ctrl'}+Enter to send.</div></div>${switchHTML('sendOnEnter', settings.sendOnEnter)}</div>
 <div class="setting"><div><div class="s-label">Show thinking</div><div class="s-help">Display the reasoning summary for thinking models (Martia, Luna 2.5, Pro).</div></div>${switchHTML('showThinking', settings.showThinking)}</div>
 <div class="setting"><div><div class="s-label">Live data</div><div class="s-help">Allow Nova to fetch facts, weather and exchange rates from Wikipedia, Open-Meteo and Frankfurter.</div></div>${switchHTML('liveData', settings.liveData)}</div>
@@ -94,6 +95,7 @@ ${fish ? `<div class="setting col voice-server">
 <div class="setting"><div><div class="s-label">Read responses aloud automatically</div></div>${switchHTML('autoRead', settings.autoRead)}</div>
 <div class="setting"><div><div class="s-label">Test voice</div></div><button class="btn sm" data-testvoice ${canSpeak ? '' : 'disabled'}>${icon('volume', 'icon-sm')} Play sample</button></div>`;
     },
+    premium: () => premiumSettingsHTML(),
     data: () => `
 <div class="setting"><div><div class="s-label">Export data</div><div class="s-help">Download all chats, memories and agents as JSON (your API key is not included).</div></div><button class="btn sm" data-export>${icon('download', 'icon-sm')} Export</button></div>
 <div class="setting"><div><div class="s-label">Import data</div><div class="s-help">Restore from a Nova export file.</div></div><button class="btn sm" data-import>${icon('upload', 'icon-sm')} Import</button></div>
@@ -102,7 +104,7 @@ ${fish ? `<div class="setting col voice-server">
 <div class="setting"><div><div class="s-label">Reset Nova</div><div class="s-help">Clears settings, memory, agents and chats from this browser.</div></div><button class="btn sm danger" data-reset>Reset everything</button></div>`,
     about: () => `
 <div style="display:flex;gap:14px;align-items:center;padding:14px 0"><img src="assets/nova-logo.svg" alt="" style="width:48px;height:48px;filter:drop-shadow(0 0 14px rgba(139,108,255,.6))"><div><h3 style="margin:0;font-size:20px">Nova</h3><div class="s-help">Six models · on-device engine + optional Claude · built for GitHub Pages</div></div></div>
-${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;align-items:center"><span class="avatar" style="background:${modelGradient(x)};border-radius:10px">${icon(x.icon, 'icon-sm')}</span><div><div class="s-label">${x.name} ${x.badge ? `<span class="tag new">${x.badge}</span>` : ''}</div><div class="s-help">${esc(x.tagline)}</div></div></div><span class="tag">${x.speed}</span></div>`).join('')}
+${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;align-items:center"><span class="avatar" style="background:${modelGradient(x)};border-radius:10px">${icon(x.icon, 'icon-sm')}</span><div><div class="s-label">${x.name} ${needsPremium(x.id) ? `<span class="tag premium">${icon('crown', 'icon-xs')}Premium</span>` : x.badge ? `<span class="tag new">${x.badge}</span>` : ''}</div><div class="s-help">${esc(x.tagline)}</div></div></div><span class="tag">${x.speed}</span></div>`).join('')}
 <p class="s-help" style="margin-top:14px">Live data: Wikipedia (CC BY-SA), Open-Meteo, Frankfurter (ECB rates). Optional cloud images: Pollinations.ai. Claude access via the official Anthropic SDK. Python runs via Pyodide; PDF reading via PDF.js.</p>`,
   };
 
@@ -118,6 +120,14 @@ ${MODELS.map((x) => `<div class="setting"><div style="display:flex;gap:12px;alig
     panel.querySelectorAll('[data-sel]').forEach((sel) => (sel.onchange = () => { saveSettings({ [sel.dataset.sel]: sel.value }); app.applySettings(); }));
     panel.querySelectorAll('[data-text]').forEach((inp) => (inp.oninput = () => { saveSettings({ [inp.dataset.text]: inp.value }); app.applySettings(); }));
     panel.querySelector('[data-open="shortcuts"]')?.addEventListener('click', () => openShortcuts());
+    const defModel = panel.querySelector('[data-sel="model"]');
+    if (defModel) defModel.onchange = () => {
+      const id = defModel.value;
+      if (!requireModel(id, { onUnlock: () => { saveSettings({ model: id }); app.applySettings(); if (panel.isConnected) show(t); } })) { defModel.value = settings.model; return; }
+      saveSettings({ model: id });
+      app.applySettings();
+    };
+    if (t === 'premium') bindPremiumSettings(panel, () => { if (panel.isConnected) show('premium'); });
     if (t === 'engine') {
       panel.querySelectorAll('[data-engine]').forEach((b) => (b.onclick = () => {
         saveSettings({ engine: b.dataset.engine });
@@ -359,7 +369,7 @@ export function openAgentEditor(app, agent, onSaved) {
 <div class="setting col"><div class="s-label">Description</div><input class="field" data-f="desc" value="${esc(a.desc)}" placeholder="What does this agent do?"></div>
 <div class="setting col"><div><div class="s-label">Instructions</div><div class="s-help">How should it behave? What should it focus on or avoid? (Used by the Claude engine.)</div></div><textarea class="field" data-f="instructions" rows="5" placeholder="You are a friendly Python tutor who explains with short examples…">${esc(a.instructions)}</textarea></div>
 <div class="setting col"><div class="s-label">Conversation starters (one per line)</div><textarea class="field" data-f="starters" rows="3">${esc((a.starters || []).join('\n'))}</textarea></div>
-<div class="setting"><div class="s-label">Model</div><select class="field" data-f="model">${MODELS.map((x) => `<option value="${x.id}"${x.id === a.model ? ' selected' : ''}>${x.name}</option>`).join('')}</select></div>
+<div class="setting"><div class="s-label">Model</div><select class="field" data-f="model">${MODELS.map((x) => `<option value="${x.id}"${x.id === a.model ? ' selected' : ''}>${x.name}${needsPremium(x.id) ? ' (Premium)' : ''}</option>`).join('')}</select></div>
 <div class="setting"><div class="s-label">Default tool</div><select class="field" data-f="tool"><option value="">None</option>${[['search', 'AI Mode'], ['dynamic', 'Dynamic View'], ['image', 'Create image'], ['research', 'Deep research'], ['study', 'Study and learn'], ['canvas', 'Canvas'], ['file', 'Create file'], ['think', 'Think longer']].map(([v, l]) => `<option value="${v}"${a.tool === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>`,
     foot: '<button class="btn" data-close>Cancel</button><button class="btn primary" data-save>Save agent</button>',
   });
