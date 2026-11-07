@@ -1,5 +1,5 @@
 // Nova service worker — offline app shell (network-first, cache fallback).
-const VERSION = 'nova-v9';
+const VERSION = 'nova-v10';
 const SHELL = [
   './',
   'index.html',
@@ -55,6 +55,7 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
+  if (url.pathname.startsWith('/__/')) return; // Firebase's sign-in pages: always from the network, never cached
   // Network-first keeps every module in sync after an update; the cache is the offline fallback.
   e.respondWith(fetch(req).then((res) => {
     if (res.ok) { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(req.mode === 'navigate' ? 'index.html' : req, copy)); }

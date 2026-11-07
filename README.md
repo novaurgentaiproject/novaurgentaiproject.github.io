@@ -87,9 +87,10 @@ sw.js                 offline service worker
 voice-server/         Cloudflare Worker that relays speech to and from Fish Audio (James's voice, listening)
 premium-server/       Cloudflare Worker that confirms Nova Premium purchases with Stripe
 js/premium.js         Nova Premium: the Martia lock, Upgrade screen, codes and membership checks
-js/account.js         Accounts: log in with Google, Apple or email (Firebase Authentication)
+js/account.js         Accounts: log in with Google or email (Firebase Authentication)
 js/sync.js            Account sync of chats, memory, agents, personalization and Premium (Firestore)
 accounts/             Firebase setup guide and Firestore security rules
+__/auth/, __/firebase/ Firebase's sign-in helper pages, hosted here so Google sign-in shows this site's address
 ```
 
 ## Privacy

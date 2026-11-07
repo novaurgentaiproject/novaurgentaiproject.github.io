@@ -17,10 +17,14 @@ import { removePremium, isPremium } from './premium.js';
  * General → Your apps → SDK setup and configuration → Config). These values are
  * meant to be public, so they're safe in this file. Until it's set, the Log in
  * screen says accounts are coming soon.
+ *
+ * authDomain is this site rather than nova-ai-7b8d5.firebaseapp.com, so Google's
+ * sign-in window names Nova's own address. That works because the site hosts
+ * Firebase's sign-in helper pages in __/auth/ (see accounts/README.md).
  */
 export const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCxD5bxy3Kd3GBNIQf-lR-KteysZijPsWE',
-  authDomain: 'nova-ai-7b8d5.firebaseapp.com',
+  authDomain: 'novaurgentaiproject.github.io',
   projectId: 'nova-ai-7b8d5',
   storageBucket: 'nova-ai-7b8d5.firebasestorage.app',
   messagingSenderId: '383478123329',
@@ -28,7 +32,9 @@ export const FIREBASE_CONFIG = {
 };
 /**
  * Sign-in methods to offer: any of 'google', 'apple', 'email'. Add 'apple' once
- * Sign in with Apple is set up in Firebase (needs an Apple Developer membership).
+ * Sign in with Apple is set up in Firebase (needs an Apple Developer membership)
+ * and authDomain is set back to nova-ai-7b8d5.firebaseapp.com: Apple sends its
+ * answer as a form post, which a GitHub Pages site can't receive.
  */
 export const SIGN_IN_METHODS = ['google', 'email'];
 export const ACCOUNTS_GUIDE = 'https://github.com/novaurgentaiproject/novaurgentaiproject.github.io/blob/HEAD/accounts/README.md';

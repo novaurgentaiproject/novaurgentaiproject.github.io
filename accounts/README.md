@@ -58,6 +58,19 @@ export const FIREBASE_CONFIG = {
 };
 ```
 
+### Show Nova's address in the Google sign-in window (optional)
+
+By default, Google's sign-in window says "continue to YOUR-PROJECT-ID.firebaseapp.com". Nova hosts Firebase's sign-in helper pages itself (in [`__/auth/`](../__/auth) and [`__/firebase/init.json`](../__/firebase/init.json)), so it can use its own address instead. This is Firebase's "self-host the helper code" setup. It also helps Safari, which blocks some cross-site storage that sign-in otherwise relies on:
+
+1. Set `authDomain` in `FIREBASE_CONFIG` (and in `__/firebase/init.json`) to `novaurgentaiproject.github.io`.
+2. In the [Google Cloud console](https://console.cloud.google.com/apis/credentials), pick your Firebase project and open the OAuth client called **Web client (auto created by Google Service)**. Under **Authorized redirect URIs**, add `https://novaurgentaiproject.github.io/__/auth/handler` and click **Save**. Until you do, Google sign-in shows "Error 400: redirect_uri_mismatch".
+
+Firebase updates the helper now and then. To refresh it, download these files from `https://YOUR-PROJECT-ID.firebaseapp.com/__/auth/` and replace the copies in `__/auth/`: `handler` (save as `handler.html`), `handler.js`, `experiments.js`, `iframe` (save as `iframe.html`) and `iframe.js`.
+
+**Sign in with Apple doesn't work with this setup:** Apple sends its answer as a form post, which a GitHub Pages site can't receive. To add Apple, set `authDomain` back to `YOUR-PROJECT-ID.firebaseapp.com` (in both places) first.
+
+### About these values
+
 These values aren't secret. They only identify your Firebase project; the security rules are what protect people's data. For extra safety, restrict the API key to your site in the [Google Cloud console](https://console.cloud.google.com/apis/credentials). Edit the "Browser key", choose **Websites** and add `https://novaurgentaiproject.github.io/*`.
 
 Open Nova, tap **Sign up**, and create an account to try it.
