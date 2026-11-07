@@ -19,9 +19,9 @@ You can change which Claude model and effort level each Nova model uses in **Set
 
 ## Accounts
 
-People can **log in with Google, Apple, or an email and password**. A logged-in account keeps chats, memory, custom agents, personalization and Premium in sync across all their devices. API keys and device settings never leave the device, and Nova still works without an account.
+People can **log in with Google or an email and password** (Sign in with Apple can be added; see [accounts/README.md](accounts/README.md)). A logged-in account keeps chats, memory, custom agents, personalization and Premium in sync across all their devices. API keys and device settings never leave the device, and Nova still works without an account.
 
-Accounts run on Firebase (free Spark plan). [Set them up in about 10 minutes](accounts/README.md); until then, the Log in screen says accounts are coming soon. **Settings → Account** shows the account and sync status, and has options to change the name or password, log out, or delete the account.
+Accounts run on Firebase (free Spark plan), in the `nova-ai-7b8d5` project. [Setup guide](accounts/README.md). **Settings → Account** shows the account and sync status, and has options to change the name or password, log out, or delete the account.
 
 ## Nova Premium
 

@@ -18,9 +18,19 @@ import { removePremium, isPremium } from './premium.js';
  * meant to be public, so they're safe in this file. Until it's set, the Log in
  * screen says accounts are coming soon.
  */
-export const FIREBASE_CONFIG = null;
-/** Sign-in methods to offer: any of 'google', 'apple', 'email'. */
-export const SIGN_IN_METHODS = ['google', 'apple', 'email'];
+export const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyCxD5bxy3Kd3GBNIQf-lR-KteysZijPsWE',
+  authDomain: 'nova-ai-7b8d5.firebaseapp.com',
+  projectId: 'nova-ai-7b8d5',
+  storageBucket: 'nova-ai-7b8d5.firebasestorage.app',
+  messagingSenderId: '383478123329',
+  appId: '1:383478123329:web:dcceca77b45358bfad2fc0',
+};
+/**
+ * Sign-in methods to offer: any of 'google', 'apple', 'email'. Add 'apple' once
+ * Sign in with Apple is set up in Firebase (needs an Apple Developer membership).
+ */
+export const SIGN_IN_METHODS = ['google', 'email'];
 export const ACCOUNTS_GUIDE = 'https://github.com/novaurgentaiproject/novaurgentaiproject.github.io/blob/HEAD/accounts/README.md';
 
 const SDK = 'https://www.gstatic.com/firebasejs/12.19.0';
@@ -124,6 +134,7 @@ const ERRORS = {
   'auth/popup-blocked': 'Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.',
   'auth/unauthorized-domain': "This website isn't allowed to sign in yet: add it in Firebase under Authentication → Settings → Authorized domains.",
   'auth/operation-not-allowed': "This way of signing in isn't turned on yet.",
+  'auth/configuration-not-found': "Logging in isn't turned on yet. (In Firebase: Authentication → Get started.)",
   'auth/account-exists-with-different-credential': 'You already have an account with this email that uses a different way of signing in. Use that one.',
   'auth/user-disabled': 'This account has been turned off.',
   'auth/requires-recent-login': 'For your security, log in again, then try once more.',
@@ -401,11 +412,16 @@ export function syncLine(st = syncState) {
   return 'Waiting to sync…';
 }
 
+const methodsText = () => {
+  const names = SIGN_IN_METHODS.map((m) => ({ google: 'Google', apple: 'Apple', email: 'your email' })[m]).filter(Boolean);
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names.at(-1)}` : names[0] || 'your email';
+};
+
 export function accountSettingsHTML() {
   const enabled = accountsEnabled();
   if (!current) {
     return `<div class="acct-card"><span class="avatar big">${icon('user', 'icon-sm')}</span><div><b>You're not logged in</b><small>${enabled ? 'Log in to save your chats, memory and Premium to an account and use them on all your devices.' : 'Nova accounts are coming soon. For now, everything stays on this device.'}</small></div></div>
-<div class="setting"><div><div class="s-label">Nova account</div><div class="s-help">Log in with Google, Apple or your email.</div></div><div class="inline"><button class="btn sm" data-login${enabled ? '' : ' disabled'}>Log in</button><button class="btn primary sm" data-signup${enabled ? '' : ' disabled'}>Sign up</button></div></div>`;
+<div class="setting"><div><div class="s-label">Nova account</div><div class="s-help">Log in with ${methodsText()}.</div></div><div class="inline"><button class="btn sm" data-login${enabled ? '' : ' disabled'}>Log in</button><button class="btn primary sm" data-signup${enabled ? '' : ' disabled'}>Sign up</button></div></div>`;
   }
   const u = current;
   const st = syncState;

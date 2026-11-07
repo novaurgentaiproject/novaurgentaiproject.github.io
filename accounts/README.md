@@ -34,7 +34,7 @@ In **Build → Authentication → Get started → Sign-in method**:
   3. Create a **Key** with **Sign in with Apple** turned on, and download it.
   4. Back in Firebase, enable **Apple** and enter the Services ID, your Apple Team ID, the Key ID and the private key.
 
-  To skip Apple, remove `'apple'` from `SIGN_IN_METHODS` in [`js/account.js`](../js/account.js) so the button doesn't show.
+  Nova hides the Apple button until you add `'apple'` to `SIGN_IN_METHODS` in [`js/account.js`](../js/account.js). Do that once Apple is turned on in Firebase.
 
 Then, in **Authentication → Settings → Authorized domains**, click **Add domain** and add `novaurgentaiproject.github.io`.
 

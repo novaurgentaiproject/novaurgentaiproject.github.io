@@ -152,6 +152,7 @@ export const hasUnsynced = () => !!(dirty.size || removed.size || groupsDirty.si
 
 function friendly(e) {
   const code = String(e?.code || '');
+  if (/has not been used|is disabled|does not exist/i.test(e?.message || '')) return "The account database isn't set up yet. (In Firebase: Firestore Database → Create database.)";
   if (code.includes('permission-denied')) return "Your account's data couldn't be accessed. Check the Firestore security rules.";
   if (code.includes('unavailable') || navigator.onLine === false) return "You're offline. Nova will sync when you're back online.";
   if (code.includes('resource-exhausted')) return 'The sync limit for today was reached. Nova will try again later.';
