@@ -1,11 +1,24 @@
-# Deploy with:  npx wrangler deploy        (run inside this folder)
-# Then add your secrets:
-#   npx wrangler secret put STRIPE_SECRET_KEY
-#   npx wrangler secret put PREMIUM_CODES          (optional gift codes)
+# Deploy with:  npm install && npx wrangler deploy        (run inside this folder)
+# or connect this folder to Cloudflare from GitHub (see README.md).
+#
+# Settings live in the Cloudflare dashboard (Worker → Settings → Variables and Secrets):
+#   STRIPE_SECRET_KEY    (secret)  Stripe restricted key
+#   ANTHROPIC_API_KEY    (secret)  your Claude API key, for members' Martia chats
+#   STRIPE_PAYMENT_LINK  (text)    your Payment Link: plink_… or https://buy.stripe.com/…
+#   MONTHLY_AI_BUDGET    (text)    optional: each member's monthly Claude allowance in US dollars (default 4.70)
+#   PREMIUM_CODES        (secret)  optional gift codes, comma-separated
+#   ALLOWED_ORIGINS      (text)    optional: sites allowed to use this server
 name = "nova-premium"
 main = "worker.js"
 compatibility_date = "2026-10-01"
+# Keep the text settings added in the dashboard when deploying.
+keep_vars = true
 
-[vars]
-# Your Payment Link's ID (plink_…) or address (https://buy.stripe.com/…)
-STRIPE_PAYMENT_LINK = ""
+# Each member's monthly Martia allowance (one small Durable Object per member).
+[[durable_objects.bindings]]
+name = "USAGE"
+class_name = "MemberUsage"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MemberUsage"]

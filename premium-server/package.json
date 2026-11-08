@@ -1,0 +1,16 @@
+{
+  "name": "nova-premium",
+  "private": true,
+  "type": "module",
+  "description": "Nova premium server: Stripe memberships and Nova 3 Martia for members (Cloudflare Worker)",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.6.0"
+  },
+  "devDependencies": {
+    "wrangler": "4.158.0"
+  }
+}

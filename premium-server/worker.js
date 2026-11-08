@@ -1,5 +1,5 @@
-// Nova premium server: a small Cloudflare Worker that confirms Nova Premium
-// memberships for the Nova website.
+// Nova premium server: a small Cloudflare Worker that sells and serves Nova
+// Premium for the Nova website.
 //
 // How buying works: Nova's Upgrade button opens your Stripe Payment Link. After
 // paying, Stripe sends the buyer back to Nova as ?premium={CHECKOUT_SESSION_ID}.
@@ -7,16 +7,32 @@
 // for a subscription, whether it is still active). The ID then works as the
 // buyer's Premium key on any device. Your Stripe key stays on this server.
 //
+// Martia included: members chat with Nova 3 Martia through this server, which
+// calls Claude with YOUR Anthropic API key, so they don't need a key of their
+// own. Each member gets a monthly AI allowance (MONTHLY_AI_BUDGET, in US dollars
+// of Claude usage). The server counts every request's tokens before sending it,
+// holds the most it could cost, and charges the member's allowance what it really
+// cost once it finishes. Allowances live in a Durable Object (one per member).
+//
 // Environment (Workers → your worker → Settings → Variables and Secrets):
 //   STRIPE_SECRET_KEY    (secret) a Stripe restricted key (rk_live_…) or secret
 //                        key (sk_live_…). See README.md for the permissions.
 //   STRIPE_PAYMENT_LINK  the Payment Link people buy Premium with: its ID
 //                        (plink_…) or its address (https://buy.stripe.com/…).
 //                        Only purchases made through it unlock Premium.
+//   ANTHROPIC_API_KEY    (secret) your Claude API key, used for members' Martia
+//                        chats. Without it, Premium only unlocks Martia for
+//                        people who bring their own key.
+//   MONTHLY_AI_BUDGET    (optional) each member's monthly Claude allowance in US
+//                        dollars. Default 4.70.
 //   PREMIUM_CODES        (secret, optional) comma-separated gift codes that
 //                        unlock Premium. Remove a code to switch it off.
 //   ALLOWED_ORIGINS      (optional) comma-separated sites allowed to use this
 //                        server. Defaults to the Nova site plus localhost.
+// Binding (in wrangler.toml): USAGE, the MemberUsage Durable Object.
+
+import Anthropic from '@anthropic-ai/sdk';
+import { DurableObject } from 'cloudflare:workers';
 
 const DEFAULT_ORIGINS = [
   'https://novaurgentaiproject.github.io',
@@ -32,12 +48,15 @@ const CACHE_MS = 5 * 60e3;
 let linkCache = null;
 let planCache = null;
 
+// ---------------------------------------------------------------------------
+// Stripe
+// ---------------------------------------------------------------------------
 class StripeError extends Error {}
 
 async function stripe(env, path, { method = 'GET', form } = {}) {
   let res;
   try {
-    res = await fetch(`https://api.stripe.com/v1/${path}`, {
+    res = await fetch(`${env.STRIPE_API_BASE || 'https://api.stripe.com'}/v1/${path}`, {
       method,
       headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
       body: form ? new URLSearchParams(form) : undefined,
@@ -76,8 +95,9 @@ async function paymentLink(env) {
 
 /** Price and checkout address, for Nova's Upgrade screen. */
 async function plan(env) {
-  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured' };
-  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return planCache.plan;
+  const ai = aiInfo(env);
+  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai };
+  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai };
   const link = await paymentLink(env);
   let result;
   if (!link) result = { available: false, reason: 'link-not-found' };
@@ -97,7 +117,7 @@ async function plan(env) {
     };
   }
   planCache = { ref: linkRef(env), at: Date.now(), plan: result };
-  return result;
+  return { ...result, ai };
 }
 
 const norm = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -132,6 +152,7 @@ async function verify(env, rawKey) {
       if (!ACTIVE.has(sub.status)) return { premium: false, reason: sub.status === 'paused' ? 'paused' : ['incomplete', 'unpaid'].includes(sub.status) ? 'unpaid' : 'ended' };
       const item = sub.items?.data?.[0];
       // Newer Stripe API versions keep the period on the subscription item.
+      const periodStart = sub.current_period_start ?? item?.current_period_start ?? null;
       const periodEnd = sub.current_period_end ?? item?.current_period_end ?? null;
       const endsAt = sub.cancel_at || (sub.cancel_at_period_end ? periodEnd : null);
       return {
@@ -140,6 +161,8 @@ async function verify(env, rawKey) {
         intervalCount: item?.price?.recurring?.interval_count || 1,
         renews: !endsAt && periodEnd ? periodEnd * 1000 : null,
         endsAt: endsAt ? endsAt * 1000 : null,
+        periodStart: periodStart ? periodStart * 1000 : null,
+        periodEnd: periodEnd ? periodEnd * 1000 : null,
       };
     }
 
@@ -173,12 +196,370 @@ async function portal(env, key, returnUrl, origins, origin) {
   return [200, { url: ps.url }];
 }
 
+// ---------------------------------------------------------------------------
+// Martia included: members' allowance
+// ---------------------------------------------------------------------------
+/** The Claude model behind Nova 3 Martia for members. */
+const MARTIA_MODEL = 'claude-opus-5-5';
+const MARTIA_NAME = 'Nova 3 Martia';
+const MAX_OUTPUT_TOKENS = 20000; // per reply, so one answer can't eat a big part of the month
+const MAX_INPUT_TOKENS = 100000; // per request (the conversation so far plus attachments)
+const MIN_OUTPUT_TOKENS = 1024; // below this a reply isn't worth starting
+const MAX_BODY_BYTES = 12 * 1024 * 1024;
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+const MEMBER_RECHECK_MS = 10 * 60e3; // re-confirm a member with Stripe this often while they chat
+const HOLD_EXPIRY_MS = 15 * 60e3; // a hold not settled by then is charged in full
+
+// US dollars per million tokens. A refusal fallback can finish a reply on another
+// model, so holds assume the most expensive model a fallback might use.
+const PRICES = {
+  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
+  'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5 },
+  'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5 },
+};
+const PRICE_UNKNOWN = { input: 5, output: 25, cacheRead: 0.5 };
+const HOLD_INPUT = PRICE_UNKNOWN.input * 1.25; // worst case: every input token written to the cache
+const HOLD_OUTPUT = PRICE_UNKNOWN.output;
+// Amounts are kept in micro-dollars: a price in $ per million tokens is µ$ per token.
+
+const aiEnabled = (env) => !!(env.ANTHROPIC_API_KEY && env.USAGE);
+function monthlyBudget(env) {
+  const n = Number.parseFloat(env.MONTHLY_AI_BUDGET);
+  return Number.isFinite(n) && n >= 0 ? n : 4.7;
+}
+function aiInfo(env) {
+  return aiEnabled(env) ? { included: true, model: MARTIA_NAME, monthlyBudget: monthlyBudget(env) } : { included: false };
+}
+
+/** Cost in µ$ of a usage object (one attempt) on a model. */
+function usageCost(u, model) {
+  if (!u) return 0;
+  const p = PRICES[model] || PRICE_UNKNOWN;
+  const write1h = u.cache_creation?.ephemeral_1h_input_tokens || 0;
+  const writeAll = u.cache_creation_input_tokens || 0;
+  const write5m = Math.max(0, writeAll - write1h);
+  return (u.input_tokens || 0) * p.input
+    + write5m * p.input * 1.25
+    + write1h * p.input * 2
+    + (u.cache_read_input_tokens || 0) * p.cacheRead
+    + (u.output_tokens || 0) * p.output;
+}
+
+/** Cost in µ$ of a whole reply. usage.iterations, when present, has every attempt (including fallbacks). */
+function replyCost(usage, model) {
+  const its = Array.isArray(usage?.iterations) ? usage.iterations : [];
+  if (its.length) return Math.ceil(its.reduce((sum, it) => sum + usageCost(it, it.model || model), 0));
+  return Math.ceil(usageCost(usage, model));
+}
+
+/** The member's current allowance period: their billing period, or the calendar month. */
+function periodFor(env, m) {
+  const perMonth = monthlyBudget(env) * 1e6;
+  if (m.kind === 'stripe' && m.periodStart && m.periodEnd) {
+    const months = { day: 1 / 30, week: 7 / 30, month: 1, year: 12 }[m.interval] ?? 1;
+    return { id: `p${m.periodStart}`, resetsAt: m.periodEnd, budget: Math.round(perMonth * months * (m.intervalCount || 1)) };
+  }
+  const now = new Date();
+  return {
+    id: `m${now.getUTCFullYear()}-${now.getUTCMonth() + 1}`,
+    resetsAt: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+    budget: Math.round(perMonth),
+  };
+}
+
+async function sha256hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+/** One allowance per Premium key (a gift code's members share it). */
+async function memberId(rawKey) {
+  const key = String(rawKey || '').trim();
+  return sha256hex(SESSION_ID.test(key) ? key : `code:${norm(key)}`);
+}
+
+/**
+ * One member's allowance and membership check. A Durable Object handles one
+ * request at a time, so two replies started together can't both spend the same
+ * money.
+ */
+export class MemberUsage extends DurableObject {
+  async #load() {
+    this.s ??= (await this.ctx.storage.get('s')) || { period: null, spent: 0, holds: {}, member: null };
+    return this.s;
+  }
+  async #save() { await this.ctx.storage.put('s', this.s); }
+  #roll(s, period) {
+    if (s.period !== period.id) { s.period = period.id; s.spent = 0; s.holds = {}; }
+    const now = Date.now();
+    for (const [id, hd] of Object.entries(s.holds)) {
+      if (now - hd.at > HOLD_EXPIRY_MS) { s.spent += hd.amount; delete s.holds[id]; }
+    }
+  }
+  #held(s) { return Object.values(s.holds).reduce((a, hd) => a + hd.amount, 0); }
+
+  async member() { return (await this.#load()).member; }
+  async setMember(member) { const s = await this.#load(); s.member = member; await this.#save(); }
+
+  async usage(period) {
+    const s = await this.#load();
+    this.#roll(s, period);
+    await this.#save();
+    return { spent: s.spent, held: this.#held(s), budget: period.budget, resetsAt: period.resetsAt };
+  }
+
+  /**
+   * Reserve money for one reply. `inputCost` is what the request's input can cost;
+   * the rest of the hold pays for up to `maxOutput` tokens at `outputPrice`.
+   */
+  async hold(period, { inputCost, maxOutput, outputPrice, minOutput }) {
+    const s = await this.#load();
+    this.#roll(s, period);
+    if (Object.keys(s.holds).length >= 3) { await this.#save(); return { ok: false, reason: 'busy' }; }
+    const left = period.budget - s.spent - this.#held(s);
+    const outTokens = Math.min(maxOutput, Math.floor((left - inputCost) / outputPrice));
+    if (outTokens < minOutput) { await this.#save(); return { ok: false, reason: 'allowance', left: Math.max(0, left) }; }
+    const id = crypto.randomUUID();
+    const amount = Math.ceil(inputCost + outTokens * outputPrice);
+    s.holds[id] = { amount, at: Date.now() };
+    await this.#save();
+    return { ok: true, id, maxTokens: outTokens };
+  }
+
+  /** Swap a hold for what the reply really cost. */
+  async settle(period, id, cost) {
+    const s = await this.#load();
+    const hd = s.holds[id];
+    if (hd) delete s.holds[id];
+    if (s.period === period.id) s.spent += Math.max(0, Math.ceil(cost));
+    await this.#save();
+    return { spent: s.spent };
+  }
+}
+
+const stub = (env, id) => env.USAGE.get(env.USAGE.idFromName(id));
+
+/** The data of the first (or last) `name` event in a piece of a server-sent event stream. */
+function findEvent(text, name, first = false) {
+  const tag = `event: ${name}`;
+  const i = first ? text.indexOf(tag) : text.lastIndexOf(tag);
+  if (i < 0) return null;
+  const d = text.indexOf('data:', i);
+  const end = d < 0 ? -1 : text.indexOf('\n', d);
+  if (end < 0) return null;
+  try { return JSON.parse(text.slice(d + 5, end).trim()); } catch { return null; }
+}
+
+/** Confirm a member, using the Durable Object's recent answer while they chat. */
+async function memberFor(env, key) {
+  const id = await memberId(key);
+  const usage = stub(env, id);
+  const cached = await usage.member();
+  if (cached && Date.now() - cached.at < MEMBER_RECHECK_MS) return { id, usage, member: cached.result };
+  let result;
+  try {
+    result = await verify(env, key);
+  } catch (e) {
+    // Stripe is unreachable: keep serving a member confirmed in the last hour.
+    if (cached?.result?.premium && Date.now() - cached.at < 3600e3) return { id, usage, member: cached.result };
+    throw e;
+  }
+  await usage.setMember({ at: Date.now(), result });
+  return { id, usage, member: result };
+}
+
+const dollars = (micros) => Math.round(micros) / 1e6;
+function usageReport(u) {
+  const left = Math.max(0, u.budget - u.spent - u.held);
+  return {
+    included: true, model: MARTIA_NAME,
+    budget: dollars(u.budget), spent: dollars(u.spent + u.held), left: dollars(left),
+    fraction: u.budget > 0 ? Math.min(1, (u.spent + u.held) / u.budget) : 1,
+    resetsAt: u.resetsAt,
+  };
+}
+
+const MEMBER_REASONS = {
+  invalid: "That Premium key isn't valid.",
+  'not-found': "Nova couldn't find that purchase.",
+  unpaid: "That payment hasn't gone through yet.",
+  ended: 'Your Premium membership has ended.',
+  paused: 'Your Premium membership is paused.',
+  refunded: 'That purchase was refunded.',
+  'other-product': "That purchase isn't for Nova Premium.",
+};
+
+// Errors for the chat route use Claude's error shape, so the Claude SDK in the
+// browser reads them like any other API error. All are 4xx so it doesn't retry.
+const apiError = (status, type, message, extra = {}) => [status, { type: 'error', error: { type, message, ...extra } }];
+
+/** POST /ai/v1/messages: a member's Martia reply, streamed in Claude's format. */
+async function martia(request, env, ctx, headers) {
+  const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  if (!aiEnabled(env)) return send(apiError(400, 'not_configured', "Martia isn't included with Premium on this server yet. Connect your own Claude key in Settings → Engine, or try again later."));
+  // The member's Premium key arrives where the Claude SDK puts an API key: in
+  // x-api-key or, in newer SDK versions, as an Authorization bearer token.
+  const key = request.headers.get('x-api-key') || /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') || '')?.[1] || '';
+  if (!key || key.length > 300) return send(apiError(401, 'authentication_error', 'Add your Premium key in Settings → Premium.'));
+
+  const size = Number(request.headers.get('content-length') || 0);
+  if (size > MAX_BODY_BYTES) return send(apiError(413, 'request_too_large', 'This conversation is too big for Martia. Start a new chat, or remove some attachments.'));
+  let body;
+  try { body = JSON.parse(await request.text()); } catch { return send(apiError(400, 'invalid_request_error', 'Expected a JSON body.')); }
+  if (!Array.isArray(body?.messages) || !body.messages.length || body.messages.length > 500) return send(apiError(400, 'invalid_request_error', 'Expected a list of messages.'));
+  if (body.system != null && typeof body.system !== 'string' && !Array.isArray(body.system)) return send(apiError(400, 'invalid_request_error', 'Expected a text system prompt.'));
+
+  let who;
+  try { who = await memberFor(env, key); } catch { return send(apiError(400, 'premium_check_failed', "Nova couldn't confirm your Premium membership right now. Try again in a minute.")); }
+  if (!who.member?.premium) return send(apiError(403, 'permission_error', `${MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended} Martia isn't included any more.`, { reason: who.member?.reason || 'ended' }));
+  const period = periodFor(env, who.member);
+
+  const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined, maxRetries: 1 });
+  const effort = body.output_config?.effort === 'max' ? 'xhigh' : EFFORTS.has(body.output_config?.effort) ? body.output_config.effort : 'high';
+  const params = {
+    model: MARTIA_MODEL,
+    system: body.system ?? undefined,
+    messages: body.messages,
+    thinking: { type: 'adaptive', display: 'summarized' },
+    output_config: { effort },
+    // Cache the conversation so each new message only pays full price for what's new.
+    cache_control: { type: 'ephemeral' },
+    metadata: { user_id: who.id.slice(0, 32) },
+  };
+
+  // Count the input first (free), so the hold covers the whole request.
+  let inputTokens;
+  try {
+    const c = await anthropic.messages.countTokens({ model: params.model, system: params.system, messages: params.messages, thinking: { type: 'adaptive' } });
+    inputTokens = c.input_tokens;
+  } catch (e) {
+    if (e instanceof Anthropic.BadRequestError) return send(apiError(400, 'invalid_request_error', e.error?.error?.message || 'Claude rejected this message.'));
+    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return send(apiError(400, 'not_configured', "Martia isn't available right now: the server's Claude key was rejected."));
+    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', 'Martia is busy right now. Try again in a moment.'));
+    return send(apiError(400, 'overloaded', "Couldn't reach Claude right now. Try again in a moment."));
+  }
+  if (inputTokens > MAX_INPUT_TOKENS) return send(apiError(413, 'request_too_large', 'This conversation is too long for Martia. Start a new chat to keep going.'));
+
+  const hold = await who.usage.hold(period, { inputCost: inputTokens * HOLD_INPUT, maxOutput: MAX_OUTPUT_TOKENS, outputPrice: HOLD_OUTPUT, minOutput: MIN_OUTPUT_TOKENS });
+  if (!hold.ok) {
+    if (hold.reason === 'busy') return send(apiError(400, 'busy', 'Martia is already answering on your other devices. Wait for those replies to finish.'));
+    return send(apiError(402, 'allowance_exhausted', "You've used this month's Martia allowance.", { resets_at: period.resetsAt }));
+  }
+  params.max_tokens = hold.maxTokens;
+
+  let settled = false;
+  const settle = (cost) => {
+    if (settled) return Promise.resolve();
+    settled = true;
+    return who.usage.settle(period, hold.id, cost).catch(() => {});
+  };
+
+  const abort = new AbortController();
+  let upstream;
+  try {
+    // asResponse(): the SDK makes the call (and raises typed errors), but hands back
+    // the raw event stream, which is passed on byte for byte. Parsing every event
+    // here would cost more CPU time than a Worker gets.
+    upstream = await anthropic.beta.messages.create(
+      { ...params, stream: true, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' },
+      { signal: abort.signal },
+    ).asResponse();
+  } catch (e) {
+    ctx.waitUntil(settle(0)); // nothing was generated
+    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', 'Martia is busy right now. Try again in a moment.'));
+    if (e instanceof Anthropic.BadRequestError) return send(apiError(400, 'invalid_request_error', e.error?.error?.message || 'Claude rejected this message.'));
+    if (e instanceof Anthropic.APIError && e.status >= 500) return send(apiError(400, 'overloaded', 'Claude is overloaded right now. Try again in a moment.'));
+    return send(apiError(400, 'api_error', "Couldn't reach Claude right now. Try again in a moment."));
+  }
+
+  // Pass Claude's event stream straight through. Usage is read from the first
+  // event (message_start: input tokens and model) and the last ones
+  // (message_delta: final counts, including any fallback attempts). If the person
+  // stops the reply (or leaves), writing fails and the request to Claude is
+  // cancelled too.
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const MARK = 'event: content_block_delta';
+  const pump = async () => {
+    const reader = upstream.body.getReader();
+    const dec = new TextDecoder();
+    let head = '';
+    let tail = '';
+    let carry = '';
+    let deltas = 0;
+    let broken = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writer.write(value);
+        const text = dec.decode(value, { stream: true });
+        if (head.length < 16384) head += text.slice(0, 16384 - head.length);
+        tail = (tail + text).slice(-32768);
+        const scan = carry + text;
+        for (let i = scan.indexOf(MARK); i !== -1; i = scan.indexOf(MARK, i + MARK.length)) deltas++;
+        carry = scan.slice(-(MARK.length - 1));
+      }
+    } catch {
+      broken = true;
+      abort.abort();
+      reader.cancel().catch(() => {});
+    } finally {
+      const start = findEvent(head, 'message_start', true);
+      const delta = findEvent(tail, 'message_delta');
+      const model = start?.message?.model || MARTIA_MODEL;
+      let usage = { ...(start?.message?.usage || { input_tokens: inputTokens }) };
+      for (const [k, v] of Object.entries(delta?.usage || {})) if (v != null) usage[k] = v;
+      const finished = !broken && !!delta && /event: message_stop/.test(tail);
+      if (!finished) {
+        // Cut short: Claude's final token count never arrived. Estimate the output
+        // from the pieces streamed so far (thinking runs longer than its summary).
+        usage = { ...usage, iterations: null, output_tokens: Math.min(params.max_tokens, Math.max(usage.output_tokens || 0, 500, deltas * 4)) };
+      }
+      await settle(replyCost(usage, model));
+      await writer.close().catch(() => {});
+    }
+  };
+  ctx.waitUntil(pump());
+  return new Response(readable, { status: 200, headers: { ...headers, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' } });
+}
+
+/** POST /v1/usage: how much of this month's Martia allowance a member has left. */
+async function memberUsage(env, key) {
+  if (!aiEnabled(env)) return [200, { included: false }];
+  const who = await memberFor(env, key);
+  if (!who.member?.premium) return [403, { message: MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended, reason: who.member?.reason || 'ended' }];
+  return [200, usageReport(await who.usage.usage(periodFor(env, who.member)))];
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+let claudeCheck = null;
+async function claudeProblem(env) {
+  if (!env.ANTHROPIC_API_KEY) return 'Add ANTHROPIC_API_KEY (a secret) so members can chat with Martia without a key of their own.';
+  if (!env.USAGE) return 'The USAGE Durable Object binding is missing. Deploy with the wrangler.toml in this folder.';
+  if (claudeCheck && Date.now() - claudeCheck.at < CACHE_MS) return claudeCheck.problem;
+  let problem = null;
+  try {
+    const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined, maxRetries: 0 });
+    await anthropic.messages.countTokens({ model: MARTIA_MODEL, messages: [{ role: 'user', content: 'ping' }] });
+  } catch (e) {
+    if (e instanceof Anthropic.AuthenticationError) problem = 'Anthropic rejected ANTHROPIC_API_KEY. Create a new key in the Claude Console and update the secret.';
+    else if (e instanceof Anthropic.PermissionDeniedError) problem = `The Anthropic key can't use ${MARTIA_MODEL}.`;
+    else if (!(e instanceof Anthropic.RateLimitError)) problem = `Couldn't check the Anthropic key: ${e.message}`;
+  }
+  claudeCheck = { at: Date.now(), problem };
+  return problem;
+}
+
 /** Setup checks shown on the health page, so problems are easy to spot. */
 async function setupProblems(env) {
   const problems = [];
   if (!env.STRIPE_SECRET_KEY) problems.push('Add STRIPE_SECRET_KEY (a secret) under Settings → Variables and Secrets.');
   if (!linkRef(env)) problems.push('Add STRIPE_PAYMENT_LINK: your Payment Link\'s ID (plink_…) or address (https://buy.stripe.com/…).');
-  if (problems.length) return problems;
+  const ai = await claudeProblem(env);
+  if (ai) problems.push(ai);
+  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return problems;
   try {
     const link = await paymentLink(env);
     if (!link) problems.push("Couldn't find that Payment Link in your Stripe account. Check STRIPE_PAYMENT_LINK, and that the key is from the same account and mode (live or test).");
@@ -195,16 +576,21 @@ async function setupProblems(env) {
   return problems;
 }
 
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
     const origins = allowed.length ? allowed : DEFAULT_ORIGINS;
     const originOk = origins.includes('*') || origins.includes(origin);
+    // The Claude SDK sends several of its own headers, so allow what the browser asks for.
+    const askHeaders = (request.headers.get('Access-Control-Request-Headers') || '').replace(/[^A-Za-z0-9,\- ]/g, '');
     const cors = {
       'Access-Control-Allow-Origin': originOk ? origin || '*' : 'null',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': askHeaders || 'Content-Type',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
     };
@@ -221,6 +607,7 @@ export default {
         service: 'nova-premium', ok: !problems.length,
         stripe: !!key, mode: /^(sk|rk)_live_/.test(key) ? 'live' : /^(sk|rk)_test_/.test(key) ? 'test' : null,
         paymentLink: !!linkRef(env),
+        martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
         codes: String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length,
         originAllowed: !origin || originOk,
         problems,
@@ -230,19 +617,20 @@ export default {
     if (!originOk) return json(403, { message: `This premium server doesn't accept requests from ${origin || 'unknown sites'}. Add it to ALLOWED_ORIGINS.` });
 
     try {
+      if (request.method === 'POST' && path === '/ai/v1/messages') return await martia(request, env, ctx, cors);
       if (request.method === 'GET' && path === '/v1/plan') return json(200, await plan(env));
-      if (request.method === 'POST' && (path === '/v1/verify' || path === '/v1/portal')) {
+      if (request.method === 'POST' && ['/v1/verify', '/v1/portal', '/v1/usage'].includes(path)) {
         let body;
         try { body = await request.json(); } catch { return json(400, { message: 'Expected a JSON body.' }); }
         if (String(body?.key || '').length > 300) return json(400, { message: 'That key is too long.' });
         if (path === '/v1/verify') return json(200, await verify(env, body?.key));
-        const [status, data] = await portal(env, body?.key, body?.returnUrl, origins, origin);
+        const [status, data] = path === '/v1/usage' ? await memberUsage(env, body?.key) : await portal(env, body?.key, body?.returnUrl, origins, origin);
         return json(status, data);
       }
     } catch (e) {
       if (e instanceof StripeError) return json(502, { message: e.status === 401 ? "The premium server's Stripe key was rejected." : `Stripe: ${e.message}` });
       return json(500, { message: 'The premium server hit an unexpected error.' });
     }
-    return json(404, { message: 'Not found. Use GET /v1/plan, POST /v1/verify or POST /v1/portal.' });
+    return json(404, { message: 'Not found. Use GET /v1/plan, POST /v1/verify, /v1/usage or /v1/portal, or POST /ai/v1/messages.' });
   },
 };

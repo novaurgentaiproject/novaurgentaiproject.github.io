@@ -7,6 +7,11 @@
 // the purchase. Nova is a static site, so the lock itself runs in the browser:
 // it keeps normal visitors out, but someone who edits the page's code could get
 // around it.
+//
+// Martia included: when the premium server has a Claude key of its own, members
+// chat with Martia through it, with no API key needed, up to a monthly allowance
+// the server keeps track of. Those replies can't be unlocked by editing the page:
+// the server checks the membership on every message.
 
 import { esc, h, copyText } from './util.js';
 import { icon } from './icons.js';
@@ -164,6 +169,7 @@ export async function redeem(input) {
   const d = await call('/v1/verify', { key: raw });
   if (!d.premium) throw new Error(reasonText(d.reason));
   save(fromServer(raw, d));
+  loadPlan({ fresh: true }).then(() => refreshAllowance());
   return premiumInfo();
 }
 
@@ -197,12 +203,13 @@ export function refreshPremium({ force = false } = {}) {
 /** Check memberships now and then: at start, when the app comes back, and when the network returns. */
 export function startPremiumChecks() {
   refreshPremium();
+  if (premiumServer()) loadPlan().then(() => { emit('premium', premiumInfo()); if (isPremium() && martiaIncluded()) refreshAllowance(); });
   addEventListener('online', () => refreshPremium());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshPremium(); });
   setInterval(() => refreshPremium(), 3600e3);
 }
 
-export function removePremium() { save(null); }
+export function removePremium() { save(null); saveAllowance(null); }
 
 /** What an account stores so Premium follows the person to their other devices. */
 export function exportPremium() {
@@ -257,6 +264,75 @@ export async function openBillingPortal() {
 }
 
 // ---------------------------------------------------------------------------
+// Martia included: the member's monthly allowance
+// ---------------------------------------------------------------------------
+const LS_ALLOWANCE = 'nova:premium-allowance';
+const MIN_LEFT = 0.03; // dollars: less than this can't pay for a reply
+let allowance = read(LS_ALLOWANCE);
+
+/** True when the premium server includes Martia (answering with its own Claude key). */
+export function martiaIncluded() {
+  const cached = read(LS_PLAN);
+  return !!premiumServer() && cached?.server === premiumServer() && !!cached.plan?.ai?.included;
+}
+
+/** This month's allowance as last reported by the server: { left, budget, fraction, resetsAt, usedUp }. */
+export function allowanceInfo() {
+  if (!allowance || allowance.key !== state?.key) return null;
+  const refilled = allowance.resetsAt && Date.now() >= allowance.resetsAt;
+  return { ...allowance, usedUp: !!allowance.usedUp && !refilled };
+}
+
+function saveAllowance(next) {
+  allowance = next;
+  try { next ? localStorage.setItem(LS_ALLOWANCE, JSON.stringify(next)) : localStorage.removeItem(LS_ALLOWANCE); } catch { /* storage unavailable */ }
+  emit('premium-usage', allowanceInfo());
+}
+
+/**
+ * Where a member's Martia reply goes: the premium server, with their Premium key.
+ * `usedUp` is true when this month's allowance has run out. Null when the person
+ * isn't a member, or the server doesn't include Martia.
+ */
+export function premiumAI(modelId = PREMIUM_MODELS[0]) {
+  if (!needsPremium(modelId) || !isPremium() || !state?.key || !martiaIncluded()) return null;
+  const a = allowanceInfo();
+  return { url: `${premiumServer()}/ai`, key: state.key, usedUp: !!a?.usedUp, resetsAt: a?.resetsAt || null };
+}
+
+/** Ask the server how much of this month's allowance is left. */
+let allowanceReq = null;
+let allowanceTried = 0;
+export function refreshAllowance() {
+  if (!state?.key || !isPremium() || !premiumServer()) return Promise.resolve(null);
+  const key = state.key;
+  allowanceTried = Date.now();
+  allowanceReq ||= call('/v1/usage', { key })
+    .then((d) => {
+      if (state?.key !== key) return null;
+      if (!d.included) { saveAllowance(null); return null; }
+      saveAllowance({ key, at: Date.now(), left: d.left, budget: d.budget, fraction: d.fraction, resetsAt: d.resetsAt, usedUp: d.left < MIN_LEFT });
+      return allowanceInfo();
+    })
+    .catch(() => allowanceInfo())
+    .finally(() => { allowanceReq = null; });
+  return allowanceReq;
+}
+
+/** The server said the allowance has run out (until `resetsAt`). */
+export function noteAllowanceUsedUp(resetsAt) {
+  if (!state?.key) return;
+  saveAllowance({ ...(allowanceInfo() || {}), key: state.key, at: Date.now(), left: 0, fraction: 1, usedUp: true, resetsAt: resetsAt || allowance?.resetsAt || null });
+}
+
+const shortDate = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+/** What to tell a member whose allowance has run out. */
+export function allowanceMessage(resetsAt) {
+  const when = resetsAt ? ` It refills on ${shortDate(resetsAt)}.` : '';
+  return `You've used this month's Nova 3 Martia allowance.${when} Until then, switch to Nova 2 Flash or another free model, or connect your own Claude key in Settings → Engine to keep using Martia.`;
+}
+
+// ---------------------------------------------------------------------------
 // Screens
 // ---------------------------------------------------------------------------
 const martia = () => getModel(PREMIUM_MODELS[0]);
@@ -281,7 +357,7 @@ export function openPremium({ modelId = PREMIUM_MODELS[0], onUnlock = null, onFa
 <li>${icon('brain', 'icon-sm')}<span><b>Deep reasoning.</b> Thinks hard problems through before answering, and shows you its thinking.</span></li>
 <li>${icon('layout', 'icon-sm')}<span><b>Interactive answers.</b> Builds calculators, simulations and visual explorers right into its replies.</span></li>
 <li>${icon('compass', 'icon-sm')}<span><b>Thorough and well-organized.</b> Comprehensive answers for complex topics, research and analysis.</span></li>
-<li>${icon('sparkles', 'icon-sm')}<span><b>Runs on ${esc(claudeLabel())}</b> when Claude is connected.</span></li>
+<li data-engine>${icon('sparkles', 'icon-sm')}<span><b>Runs on ${esc(claudeLabel())}</b> when Claude is connected.</span></li>
 </ul>
 <div class="pm-plan" data-plan><span class="shimmer-text">Loading plans…</span></div>
 <button class="btn primary pm-cta" data-buy hidden>${icon('crown', 'icon-sm')} Upgrade to Premium</button>
@@ -297,6 +373,7 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
 
   const showPlan = (plan) => {
     const buy = $('[data-buy]');
+    if (plan?.ai?.included) $('[data-engine]').innerHTML = `${icon('sparkles', 'icon-sm')}<span><b>No API key needed.</b> Martia is included, powered by Claude, with a monthly allowance that covers plenty of everyday chats.</span>`;
     if (plan?.available && /^https:\/\//.test(plan.url || '')) {
       const parts = priceParts(plan);
       $('[data-plan]').innerHTML = `${parts ? `<div class="pm-price"><b>${esc(parts.money)}</b><span>${esc(parts.per)}</span></div>` : '<div class="pm-price"><span>Choose your price at checkout</span></div>'}${plan.trialDays ? `<div class="pm-trial">${plan.trialDays}-day free trial</div>` : ''}`;
@@ -312,7 +389,7 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
       };
       // When accounts are on, Premium belongs to an account, so log in first.
       buy.onclick = () => { if (!hooks.requireAccount || hooks.requireAccount(go, 'Log in or sign up to get Premium. It stays with your account on every device.')) go(); };
-      $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}`;
+      $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}${plan.ai?.included ? " Members' Martia chats are sent through Nova's premium server to Anthropic (Claude) to be answered." : ''}`;
     } else {
       $('[data-plan]').innerHTML = `<div class="pm-soon">${icon('clock', 'icon-sm')}<span>Premium sign-ups aren't open yet. If you have a Premium code, enter it below.</span></div>`;
       buy.hidden = true;
@@ -424,6 +501,14 @@ export function premiumSettingsHTML() {
       : `<div class="pm-card">${orb()}<div><b>Free plan</b><small>${esc(m.name)} needs Nova Premium. Every other model is free.</small></div></div>`;
   const rows = [];
   if (!info.active) rows.push(`<div class="setting"><div><div class="s-label">Upgrade to Premium</div><div class="s-help">Unlock ${esc(m.name)}, Nova's most capable model.</div></div><button class="btn primary sm" data-upgrade>${icon('crown', 'icon-sm')} Upgrade</button></div>`);
+  if (info.active && state?.key && martiaIncluded()) {
+    const a = allowanceInfo();
+    const pct = a ? Math.round((a.fraction || 0) * 100) : null;
+    const line = !a ? 'Checking your allowance…'
+      : a.usedUp ? `Used up for this month. Refills on ${esc(shortDate(a.resetsAt))}.`
+        : `${pct}% used${a.resetsAt ? ` · refills on ${esc(shortDate(a.resetsAt))}` : ''}`;
+    rows.push(`<div class="setting col"><div><div class="s-label">${esc(m.name)} this month</div><div class="s-help">Included with Premium, no API key needed. ${line}</div></div><div class="pm-meter${a && (a.usedUp || a.fraction > 0.85) ? ' low' : ''}" role="progressbar" aria-label="${esc(m.name)} allowance used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct ?? 0}"><span style="width:${pct ?? 0}%"></span></div></div>`);
+  }
   if (state?.key) {
     rows.push(`<div class="setting"><div><div class="s-label">Premium key</div><div class="s-help">Enter it on your other devices, or in Nova on your Home Screen, to unlock Premium there. Keep it private: anyone with it can use your membership.</div><code class="pm-mask">${esc(maskKey(state.key))}</code></div><button class="btn sm" data-copykey>${icon('copy', 'icon-sm')} Copy</button></div>`);
     if (state.kind === 'stripe' && state.interval) rows.push(`<div class="setting"><div><div class="s-label">Manage subscription</div><div class="s-help">Change your plan, update your card or cancel. Opens Stripe's secure billing page.</div></div><button class="btn sm" data-portal>${icon('external', 'icon-sm')} Manage</button></div>`);
@@ -436,6 +521,9 @@ export function premiumSettingsHTML() {
 
 export function bindPremiumSettings(panel, rerender) {
   const q = (s) => panel.querySelector(s);
+  if (q('.pm-meter') && Date.now() - allowanceTried > 30e3) {
+    refreshAllowance().then(() => { if (panel.isConnected && q('.pm-meter')) rerender(); });
+  }
   q('[data-upgrade]')?.addEventListener('click', () => openPremium());
   q('[data-copykey]')?.addEventListener('click', async (e) => { await copyText(state.key); e.currentTarget.innerHTML = `${icon('check', 'icon-sm')} Copied`; });
   q('[data-portal]')?.addEventListener('click', async (e) => {

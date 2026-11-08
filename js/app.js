@@ -16,7 +16,7 @@ import { cleanImagePrompt } from './tools/imagegen.js';
 import { openCanvas, closeCanvas, isCanvasOpen } from './tools/canvas.js';
 import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, unlockSpeech, formatDuration } from './tools/voice.js';
 import { initAccounts, signedIn, currentUser, openLogin, confirmLogOut, accountAvatar, requireAccount, checkoutParams } from './account.js';
-import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS } from './premium.js';
+import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS, premiumAI, martiaIncluded } from './premium.js';
 
 const S = {
   chat: null,
@@ -83,7 +83,7 @@ function updateTopbar() {
   const agent = getAgent(S.chat?.agentId);
   const locked = modelLocked(m.id);
   els.modelName.textContent = agent ? `${agent.name}` : m.name;
-  els.engineTag.textContent = agent ? m.name : locked ? 'Premium' : engineReady() ? 'Claude' : 'On-device';
+  els.engineTag.textContent = agent ? m.name : locked ? 'Premium' : engineReady() || premiumAI(m.id) ? 'Claude' : 'On-device';
   els.modelBtn.classList.toggle('locked', locked && !agent);
   els.modelBtn.title = locked ? `${m.name} needs Nova Premium` : '';
   if (els.upgrade) els.upgrade.hidden = isPremium();
@@ -100,7 +100,8 @@ function updateTopbar() {
 function updateEngineCard() {
   const card = $('#engine-card');
   const on = engineReady();
-  card.innerHTML = `<span class="dot${on ? '' : ' local'}"></span><span><b>${on ? 'Claude connected' : 'On-device engine'}</b><small>${on ? 'All six models run on Claude' : 'Connect Claude for full AI'}</small></span>`;
+  const included = !on && isPremium() && martiaIncluded();
+  card.innerHTML = `<span class="dot${on || included ? '' : ' local'}"></span><span><b>${on ? 'Claude connected' : included ? 'Martia included' : 'On-device engine'}</b><small>${on ? 'All six models run on Claude' : included ? 'Martia runs on Claude · others on-device' : 'Connect Claude for full AI'}</small></span>`;
 }
 
 function updateProfile() {
@@ -1077,6 +1078,7 @@ on('premium', () => {
   if (S.chat && !S.chat.messages.length && S.chat.agentId) S.chat.model = usableModel(getAgent(S.chat.agentId)?.model || settings.model);
   updateTopbar();
   updateProfile();
+  updateEngineCard();
   if (!S.chat?.messages.length) renderHome();
 });
 on('settings', () => {});

@@ -27,7 +27,8 @@ Accounts run on Firebase (free Spark plan), in the `nova-ai-7b8d5` project. [Set
 
 Nova 3 Martia needs **Nova Premium**; the other five models are free. Free users see Martia with a lock, and an **Upgrade** button opens the Premium screen. Built-in agents that use Martia run on Nova 2 Flash for free users.
 
-- **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small free Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
+- **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
+- **Martia included:** members chat with Martia without an API key. The premium server answers with your Claude key, and gives each member a monthly allowance (default $4.70 of Claude usage, set by `MONTHLY_AI_BUDGET`). It counts each message before sending it, so a member can't go over. **Settings → Premium** shows how much is left. When it runs out, members can switch to a free model or use their own Claude key.
 - **Premium codes:** unlock Premium for yourself, friends or testers, with or without the server.
 - **With accounts on**, buying Premium asks people to log in first, and Premium is saved to their account.
 - **Settings → Premium:** shows the membership, the Premium key for other devices (and the Home Screen app), **Manage subscription** (Stripe's billing page), and code entry.
@@ -85,7 +86,7 @@ js/engines/           on-device engine, Claude engine, prompts, knowledge source
 js/tools/             images, files, canvas, AI Mode, research, study, voice, generative UI, Widget Studio
 sw.js                 offline service worker
 voice-server/         Cloudflare Worker that relays speech to and from Fish Audio (James's voice, listening)
-premium-server/       Cloudflare Worker that confirms Nova Premium purchases with Stripe
+premium-server/       Cloudflare Worker: Nova Premium purchases (Stripe) and members' Martia chats (Claude)
 js/premium.js         Nova Premium: the Martia lock, Upgrade screen, codes and membership checks
 js/account.js         Accounts: log in with Google or email (Firebase Authentication)
 js/sync.js            Account sync of chats, memory, agents, personalization and Premium (Firestore)
@@ -101,4 +102,4 @@ __/auth/, __/firebase/ Firebase's sign-in helper pages, hosted here so Google si
 - With Claude connected, messages go directly to Anthropic's API under your key.
 - With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.
 - Accounts (when logged in): chats, memory, custom agents, personalization and Premium are stored in Firebase under your account, readable only by you. API keys stay on your device.
-- Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends only that key to the premium server to confirm your membership.
+- Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends it to the premium server to confirm your membership. Members' Nova 3 Martia chats (the conversation and its attachments) go through the premium server to Anthropic's API to be answered; the server keeps only each member's monthly usage total, not the chats.

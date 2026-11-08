@@ -12,6 +12,7 @@ import { gatherSources, composeAnswer, AIMODE_INSTRUCTIONS, sourcesContext } fro
 import { runResearch, composeReport, RESEARCH_INSTRUCTIONS } from '../tools/research.js';
 import { makeQuiz } from '../tools/study.js';
 import { explorerWidget } from '../tools/genui.js';
+import { premiumAI, refreshAllowance, noteAllowanceUsedUp, allowanceMessage } from '../premium.js';
 import { pickWidget, editWidget, isWidgetEdit } from '../tools/widgetgen.js';
 
 const IMAGE_INTENT = /^(?:please\s+)?(?:can you\s+|could you\s+|i want you to\s+)?(?:generate|create|make|draw|paint|render|design|imagine|produce|show me|give me)\s+(?:me\s+)?(?:an?\s+|the\s+|some\s+|\d+\s+)?(?:[\w-]+\s+){0,3}?(?:image|picture|photo|illustration|drawing|painting|artwork|wallpaper|portrait|logo|icon|art|poster|render|scene)s?\b|^(?:draw|paint|sketch|illustrate)\s+/i;
@@ -22,6 +23,21 @@ export function detectImageIntent(text) {
 }
 
 const bumpEffort = (e) => ({ low: 'medium', medium: 'high', high: 'xhigh', xhigh: 'max', max: 'max' })[e] || 'high';
+
+/**
+ * How a reply reaches Claude: Nova Premium's included Martia (through the premium
+ * server), the visitor's own API key, or not at all (the on-device engine).
+ * Members whose Martia allowance has run out use their own key if they have one;
+ * otherwise `usedUp` makes the reply explain that instead of answering on-device.
+ */
+function claudeConn(modelId) {
+  const ai = premiumAI(modelId);
+  if (ai && !ai.usedUp) return { server: ai };
+  if (engineReady()) return { apiKey: settings.anthropicKey, afterAllowance: !!ai };
+  if (ai) return { usedUp: ai };
+  return null;
+}
+const claudeOn = (ctx) => !!claudeConn(ctx.msg.model);
 
 // ---------------------------------------------------------------------------
 // Claude
@@ -79,12 +95,14 @@ export async function claudePipeline(ctx, { extra = '', userSuffix = '', effortB
   if (tool === 'think' || effortBoost) effort = bumpEffort(effort);
   const system = buildSystemPrompt({ model, tool, agent: ctx.agent, extra, voice: !!ctx.voice });
   const messages = buildClaudeMessages(ctx.chat, msg, userSuffix);
+  let conn = claudeConn(model.id);
+  if (!conn || conn.usedUp) throw Object.assign(new Error(allowanceMessage(conn?.usedUp?.resetsAt)), { code: 'allowance_exhausted' });
   v.engine = 'claude';
-  v.engineModel = map.model;
+  v.engineModel = conn.server ? 'claude-opus-5-5' : map.model;
   const start = performance.now();
   v.thinkStart = Date.now();
-  const res = await claudeStream({
-    apiKey: settings.anthropicKey, model: map.model, effort, system, messages, signal,
+  const run = (c) => claudeStream({
+    apiKey: c.apiKey, server: c.server, model: c.server ? 'claude-opus-5-5' : map.model, effort, system, messages, signal,
     onThinking: (d) => { v.thinking = (v.thinking || '') + d; ctx.update(); },
     onText: (d) => {
       if (v.thinking && !v.thinkMs) v.thinkMs = performance.now() - start;
@@ -92,10 +110,24 @@ export async function claudePipeline(ctx, { extra = '', userSuffix = '', effortB
       ctx.update();
     },
   });
+  let res;
+  try {
+    res = await run(conn);
+  } catch (e) {
+    if (!conn.server || e.code !== 'allowance_exhausted') throw e;
+    // The month's allowance ran out: carry on with the member's own key, if any.
+    noteAllowanceUsedUp(e.resetsAt);
+    if (!engineReady()) throw Object.assign(new Error(allowanceMessage(e.resetsAt)), { code: e.code });
+    conn = { apiKey: settings.anthropicKey, afterAllowance: true };
+    v.engineModel = map.model;
+    res = await run(conn);
+  }
+  if (conn.server) refreshAllowance();
   if (v.thinking && !v.thinkMs) v.thinkMs = performance.now() - start;
   if (res.stopReason === 'refusal') v.notice = { type: 'error', text: 'Claude declined to continue this response for safety reasons. Try rephrasing your request.' };
   else if (res.stopReason === 'max_tokens') v.notice = { type: 'info', text: 'This response hit the length limit. Ask Nova to continue.' };
   if (res.fallback) v.notice = { type: 'info', text: `This turn was completed by a fallback model (${res.model}).` };
+  else if (conn.afterAllowance && !v.notice) v.notice = { type: 'info', text: "This month's included Martia allowance is used up, so this reply used your own Claude key." };
   // AI Mode / research follow-ups block
   const fm = /```nova-followups\s*\n([\s\S]*?)```/.exec(v.content);
   if (fm) { try { v.followups = JSON.parse(fm[1]).slice(0, 4); } catch {} }
@@ -169,7 +201,7 @@ async function imagePipeline(ctx) {
     : /\b(three|3)\b/i.test(text) && /\b(images|pictures|variations|versions|options)\b/i.test(text) ? 3
     : /\b(two|2|a couple)\b/i.test(text) && /\b(images|pictures|variations|versions|options)\b/i.test(text) ? 2 : 1;
   v.kind = 'image';
-  v.engine = engineReady() ? 'claude' : 'local';
+  v.engine = claudeOn(ctx) ? 'claude' : 'local';
   const intro = pick(['Here you go ✦', 'Done — here\'s what I created:', 'Here\'s your image:', 'Fresh from the studio:']);
   const blocks = Array.from({ length: n }, (_, i) => `\`\`\`nova-image\n${JSON.stringify({ prompt, aspect, seed: i + (ctx.msg.versions.length - 1) * 10 })}\n\`\`\``).join('\n\n');
   const attNote = (userMsg.attachments || []).some((a) => a.kind === 'image') ? '\n\n*Note: Nova creates new images from your description — it can\'t edit the attached photo directly yet.*' : '';
@@ -182,7 +214,7 @@ async function aiModePipeline(ctx) {
   const model = getModel(msg.model);
   const q = (userMsg.content || '').trim();
   v.kind = 'aimode';
-  v.engine = engineReady() ? 'claude' : 'local';
+  v.engine = claudeOn(ctx) ? 'claude' : 'local';
   v.steps = [{ text: `Searching for "${truncate(q, 60)}"`, state: 'active' }];
   ctx.update();
   let sources = [];
@@ -192,7 +224,7 @@ async function aiModePipeline(ctx) {
   v.images = sources.filter((s) => s.thumb).map((s) => ({ src: s.thumb, url: s.url, title: s.title })).slice(0, 6);
   v.steps.push({ text: sources.length ? `Reviewed ${sources.length} sources` : 'No sources found — answering from general knowledge', state: 'done' });
   ctx.update();
-  if (engineReady()) {
+  if (claudeOn(ctx)) {
     v.steps.push({ text: 'Writing an answer with citations', state: 'active' });
     ctx.update();
     await claudePipeline(ctx, { extra: AIMODE_INSTRUCTIONS, userSuffix: sources.length ? `\n\nSOURCES:\n${sourcesContext(sources)}` : '', tool: null });
@@ -220,7 +252,7 @@ async function researchPipeline(ctx) {
   const model = getModel(msg.model);
   const q = (userMsg.content || '').trim();
   v.kind = 'research';
-  v.engine = engineReady() ? 'claude' : 'local';
+  v.engine = claudeOn(ctx) ? 'claude' : 'local';
   v.steps = [{ text: 'Planning research', state: 'active' }];
   v.research = { progress: 4, label: 'Planning research…' };
   ctx.update();
@@ -236,7 +268,7 @@ async function researchPipeline(ctx) {
   v.steps[0].state = 'done';
   if (!settings.liveData) {
     v.steps.push({ text: 'Live data is turned off — skipping web sources', state: 'done' });
-    return engineReady() ? claudePipeline(ctx, { extra: RESEARCH_INSTRUCTIONS, effortBoost: true }) : localPipeline(ctx);
+    return claudeOn(ctx) ? claudePipeline(ctx, { extra: RESEARCH_INSTRUCTIONS, effortBoost: true }) : localPipeline(ctx);
   }
   const res = await runResearch({
     query: q, plan, signal,
@@ -256,7 +288,7 @@ async function researchPipeline(ctx) {
   });
   v.sources = res.sources.map(({ text, ...s }) => s);
   ctx.update();
-  if (engineReady()) {
+  if (claudeOn(ctx)) {
     const ctxText = res.sources.map((s, i) => {
       const deep = [res.main, ...res.deep].find((a) => a && a.title === s.title);
       const body = deep ? deep.sections.map((x) => `## ${x.title}\n${x.text}`).join('\n').slice(0, 9000) : s.text;
@@ -271,7 +303,7 @@ async function researchPipeline(ctx) {
 }
 
 async function studyPipeline(ctx) {
-  if (engineReady()) return claudePipeline(ctx);
+  if (claudeOn(ctx)) return claudePipeline(ctx);
   const { userMsg, msg, version: v, signal } = ctx;
   const model = getModel(msg.model);
   const raw = (userMsg.content || '').replace(/^(quiz me|test me|make (me )?(a )?(quiz|flashcards)|flashcards|study|teach me|help me (learn|study|understand)|explain)\s*(on|about|for|with)?\s*/i, '');
@@ -292,7 +324,7 @@ async function studyPipeline(ctx) {
 }
 
 async function dynamicPipeline(ctx) {
-  if (engineReady()) return claudePipeline(ctx);
+  if (claudeOn(ctx)) return claudePipeline(ctx);
   const { userMsg, msg, version: v, signal } = ctx;
   const model = getModel(msg.model);
   const text = (userMsg.content || '').trim();
@@ -343,7 +375,7 @@ export async function respond(ctx) {
   if (tool === 'research') return researchPipeline(ctx);
   if (tool === 'study') return studyPipeline(ctx);
   if (tool === 'dynamic') return dynamicPipeline(ctx);
-  if (engineReady()) return claudePipeline(ctx);
+  if (claudeOn(ctx)) return claudePipeline(ctx);
   return localPipeline(ctx);
 }
 

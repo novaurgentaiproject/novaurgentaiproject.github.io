@@ -1,6 +1,10 @@
 // Claude engine — uses the official Anthropic TypeScript/JS SDK, loaded on demand
 // from a CDN so the static site has no build step. The user's API key never
 // leaves their browser except to call api.anthropic.com directly.
+//
+// Nova Premium members can also chat with Martia through Nova's premium server
+// (`server` below): the SDK then talks to that server with the member's Premium
+// key, and the server calls Claude with the site owner's key.
 
 const SDK_URL = 'https://esm.sh/@anthropic-ai/sdk@1.3.0?bundle';
 let sdkPromise = null;
@@ -18,14 +22,23 @@ export function loadSDK() {
 // Models that support server-side refusal fallbacks with the "default" form.
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1']);
 
-async function client(apiKey) {
+async function client(apiKey, server = null) {
   const mod = await loadSDK();
   const Anthropic = mod.default || mod.Anthropic;
-  return { Anthropic, client: new Anthropic({ apiKey, dangerouslyAllowBrowser: true }) };
+  const c = server
+    ? new Anthropic({ apiKey: server.key, baseURL: server.url, dangerouslyAllowBrowser: true, maxRetries: 1 })
+    : new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  return { Anthropic, client: c };
 }
 
-function friendlyError(e, Anthropic) {
+function friendlyError(e, Anthropic, server = null) {
   if (e?.name === 'AbortError' || e instanceof Error && /abort/i.test(e.name)) return e;
+  // Nova's premium server sends messages written for members; pass them on.
+  if (server && Anthropic && e instanceof Anthropic.APIError) {
+    const info = e.error?.error || {};
+    if (e instanceof Anthropic.APIConnectionError || !info.message) return Object.assign(new Error("Couldn't reach Nova's premium server. Check your connection and try again."), { code: 'premium-network' });
+    return Object.assign(new Error(info.message), { code: info.type || 'premium', resetsAt: info.resets_at || null, status: e.status });
+  }
   if (Anthropic) {
     if (e instanceof Anthropic.AuthenticationError) return new Error('Your Anthropic API key was rejected. Check it in Settings → Engine.');
     if (e instanceof Anthropic.PermissionDeniedError) return new Error('Your API key does not have access to this model. Pick another model mapping in Settings → Engine.');
@@ -42,10 +55,10 @@ function friendlyError(e, Anthropic) {
  * Stream a response from Claude.
  * @returns {Promise<{stopReason: string, model: string, usage: object, fallback: boolean}>}
  */
-export async function claudeStream({ apiKey, model, effort, system, messages, signal, onText, onThinking, maxTokens = 64000 }) {
+export async function claudeStream({ apiKey, server = null, model, effort, system, messages, signal, onText, onThinking, maxTokens = 64000 }) {
   let Anthropic;
   try {
-    const c = await client(apiKey);
+    const c = await client(apiKey, server);
     Anthropic = c.Anthropic;
     const params = {
       model,
@@ -70,7 +83,7 @@ export async function claudeStream({ apiKey, model, effort, system, messages, si
     const fallback = (final.usage?.iterations || []).some((it) => it.type === 'fallback_message');
     return { stopReason: final.stop_reason, stopDetails: final.stop_details, model: final.model, usage: final.usage, fallback };
   } catch (e) {
-    throw friendlyError(e, Anthropic);
+    throw friendlyError(e, Anthropic, server);
   }
 }
 
