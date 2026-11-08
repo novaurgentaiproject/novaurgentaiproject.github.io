@@ -125,7 +125,7 @@ export function encodeWav(chunks, rate, outRate = 16000) {
 }
 
 /** Send a recording to the voice server's /v1/asr and return the transcript. */
-export async function transcribe(wav, { base, key, signal, premium = false } = {}) {
+export async function transcribe(wav, { base, key, signal } = {}) {
   if (!base) throw new Error('no voice server is set up');
   const lang = (navigator.language || 'en').split('-')[0].toLowerCase();
   const headers = { 'Content-Type': wav.type || 'audio/wav', model: 'transcribe-1' };
@@ -137,7 +137,8 @@ export async function transcribe(wav, { base, key, signal, premium = false } = {
   try { data = await res.json(); } catch {}
   if (res.status === 404) throw new Error('your voice server needs updating: redeploy the latest worker.js so Nova can hear you');
   if (res.status === 401) throw new Error('the Fish Audio API key was rejected');
-  if (res.status === 402) throw Object.assign(new Error(premium ? "this month's Premium allowance is used up" : 'your Fish Audio account is out of API credit'), { status: 402, resetsAt: data.resets_at || null });
+  if (res.status === 402) throw new Error('your Fish Audio account is out of API credit');
+  if (res.status === 429 && data.message) throw new Error(data.message);
   if (!res.ok) throw new Error(data.message || `the voice server returned an error (${res.status})`);
   return String(data.text || '')
     .replace(/<\|[^|>]*\|>/g, ' ')

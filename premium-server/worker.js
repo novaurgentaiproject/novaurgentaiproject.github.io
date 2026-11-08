@@ -14,9 +14,10 @@
 // holds the most it could cost, and charges the member's allowance what it really
 // cost once it finishes. Allowances live in a Durable Object (one per member).
 //
-// James's voice included: members talk with Nova in James's voice (Fish Audio
-// text-to-speech), and Nova hears them through Fish Audio speech-to-text, with
-// YOUR Fish Audio key. Voice use comes out of the same monthly allowance.
+// James's voice for everyone: Nova talks in James's voice (Fish Audio
+// text-to-speech) and hears people through Fish Audio speech-to-text, with YOUR
+// Fish Audio key. Daily limits (per visitor, and for the whole site) cap what
+// that can cost you; past them, Nova uses the device's own voice until tomorrow.
 //
 // Environment (Workers → your worker → Settings → Variables and Secrets):
 //   STRIPE_SECRET_KEY    (secret) a Stripe restricted key (rk_live_…) or secret
@@ -27,11 +28,15 @@
 //   ANTHROPIC_API_KEY    (secret) your Claude API key, used for members' Martia
 //                        chats. Without it, Premium only unlocks Martia for
 //                        people who bring their own key.
-//   FISH_API_KEY         (secret) your Fish Audio API key, for members' voice
-//                        (James speaking, and listening). Without it, members
-//                        use their device's voice.
-//   MONTHLY_AI_BUDGET    (optional) each member's monthly allowance in US dollars
-//                        of Claude and Fish Audio usage. Default 4.70.
+//   FISH_API_KEY         (secret) your Fish Audio API key, for James's voice
+//                        (speaking, and listening). Without it, Nova uses each
+//                        device's own voice.
+//   VOICE_DAILY_PER_VISITOR  (optional) most one visitor's voice use can cost per
+//                        day, in US dollars. Default 0.50. 0 = no limit.
+//   VOICE_DAILY_TOTAL    (optional) most everyone's voice use together can cost
+//                        per day, in US dollars. Default 5.00. 0 = no limit.
+//   MONTHLY_AI_BUDGET    (optional) each member's monthly Claude allowance in US
+//                        dollars. Default 4.70.
 //   PREMIUM_CODES        (secret, optional) comma-separated gift codes that
 //                        unlock Premium. Remove a code to switch it off.
 //   ALLOWED_ORIGINS      (optional) comma-separated sites allowed to use this
@@ -319,10 +324,10 @@ export class MemberUsage extends DurableObject {
    * Reserve money for one reply. `inputCost` is what the request's input can cost;
    * the rest of the hold pays for up to `maxOutput` tokens at `outputPrice`.
    */
-  async hold(period, { inputCost, maxOutput, outputPrice, minOutput }) {
+  async hold(period, { inputCost, maxOutput, outputPrice, minOutput, maxHolds = 8 }) {
     const s = await this.#load();
     this.#roll(s, period);
-    if (Object.keys(s.holds).length >= 8) { await this.#save(); return { ok: false, reason: 'busy' }; }
+    if (Object.keys(s.holds).length >= maxHolds) { await this.#save(); return { ok: false, reason: 'busy' }; }
     const left = period.budget - s.spent - this.#held(s);
     const outTokens = Math.min(maxOutput, Math.floor((left - inputCost) / outputPrice));
     if (outTokens < minOutput) { await this.#save(); return { ok: false, reason: 'allowance', left: Math.max(0, left) }; }
@@ -540,7 +545,7 @@ async function memberUsage(env, key) {
 }
 
 // ---------------------------------------------------------------------------
-// James's voice included (Fish Audio)
+// James's voice for everyone (Fish Audio)
 // ---------------------------------------------------------------------------
 const JAMES = '802e3bc2b27e49c2995d23ef70e6ac89';
 const FISH_API = 'https://api.fish.audio';
@@ -554,8 +559,44 @@ const MAX_TTS_CHARS = 1500;
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 
 const voiceEnabled = (env) => !!(env.FISH_API_KEY && env.USAGE);
+function dollarsSetting(v, fallback) {
+  if (v == null || String(v).trim() === '') return fallback;
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const visitorDaily = (env) => dollarsSetting(env.VOICE_DAILY_PER_VISITOR, 0.5);
+const siteDaily = (env) => dollarsSetting(env.VOICE_DAILY_TOTAL, 5);
 function voiceInfo(env) {
-  return voiceEnabled(env) ? { included: true, name: 'James' } : { included: false };
+  return voiceEnabled(env) ? { included: true, everyone: true, name: 'James', dailyPerVisitor: visitorDaily(env), dailyTotal: siteDaily(env) } : { included: false };
+}
+
+/** Today (UTC) as an allowance period, with a budget in µ$ (0 dollars = no limit). */
+function voiceDay(dollars) {
+  const now = new Date();
+  return {
+    id: `d${now.toISOString().slice(0, 10)}`,
+    resetsAt: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+    budget: dollars > 0 ? Math.round(dollars * 1e6) : Number.MAX_SAFE_INTEGER,
+  };
+}
+
+/** Reserve `cost` (µ$) against today's limits: this visitor's and the whole site's. */
+async function voiceHold(env, request, cost) {
+  // Cloudflare sets CF-Connecting-IP itself, so visitors can't fake it.
+  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0].trim() || 'unknown';
+  const site = { usage: stub(env, 'voice:site'), period: voiceDay(siteDaily(env)) };
+  const visitor = { usage: stub(env, `voice:${(await sha256hex(`ip:${ip}`)).slice(0, 32)}`), period: voiceDay(visitorDaily(env)) };
+  const a = await site.usage.hold(site.period, { inputCost: cost, maxOutput: 0, outputPrice: 1, minOutput: 0, maxHolds: 500 });
+  if (!a.ok) return { ok: false, reason: a.reason === 'busy' ? 'busy' : 'site', resetsAt: site.period.resetsAt };
+  const b = await visitor.usage.hold(visitor.period, { inputCost: cost, maxOutput: 0, outputPrice: 1, minOutput: 0, maxHolds: 8 });
+  if (!b.ok) {
+    await site.usage.settle(site.period, a.id, 0);
+    return { ok: false, reason: b.reason === 'busy' ? 'busy' : 'visitor', resetsAt: visitor.period.resetsAt };
+  }
+  return {
+    ok: true,
+    settle: (c) => Promise.all([site.usage.settle(site.period, a.id, c), visitor.usage.settle(visitor.period, b.id, c)]).catch(() => {}),
+  };
 }
 
 /** Seconds of audio in a recording: exact for WAV, a generous estimate otherwise. */
@@ -568,17 +609,13 @@ function audioSeconds(buf, type) {
   return buf.byteLength / 2000; // compressed speech is rarely under 16 kbit/s
 }
 
-/** POST /voice/v1/tts and /voice/v1/asr: a member's speech, on the server's Fish Audio key. */
+/** POST /voice/v1/tts and /voice/v1/asr: anyone's speech, on the server's Fish Audio key. */
 async function voice(request, env, path, headers) {
   const send = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
-  if (!voiceEnabled(env)) return send(404, { status: 404, message: "James's voice isn't included on this server." });
-  const key = request.headers.get('x-api-key') || /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') || '')?.[1] || '';
-  if (!key || key.length > 300) return send(401, { status: 401, message: 'Add your Premium key in Settings → Premium.' });
-  let who;
-  try { who = await memberFor(env, key); } catch { return send(503, { status: 503, message: "Couldn't confirm your Premium membership right now." }); }
-  if (!who.member?.premium) return send(403, { status: 403, message: `${MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended} James's voice isn't included any more.` });
-  const period = periodFor(env, who.member);
-  const usedUp = () => send(402, { status: 402, message: "this month's Premium allowance is used up", reason: 'allowance_exhausted', resets_at: period.resetsAt });
+  if (!voiceEnabled(env)) return send(404, { status: 404, message: "James's voice isn't set up on this server." });
+  const refused = (h) => h.reason === 'busy'
+    ? send(429, { status: 429, reason: 'busy', message: 'too many voice requests at once' })
+    : send(429, { status: 429, reason: 'daily_limit', message: "today's voice limit was reached", resets_at: h.resetsAt });
   const fish = (p, init) => fetch(`${env.FISH_API_BASE || FISH_API}${p}`, { ...init, headers: { Authorization: `Bearer ${env.FISH_API_KEY}`, ...init.headers } });
 
   if (path === '/voice/v1/asr') {
@@ -588,8 +625,8 @@ async function voice(request, env, path, headers) {
     if (!audio.byteLength) return send(400, { status: 400, message: 'The recording is empty.' });
     if (audio.byteLength > MAX_AUDIO_BYTES) return send(413, { status: 413, message: 'The recording is too long.' });
     const estimate = Math.ceil(audioSeconds(audio, type)) * ASR_PRICE_PER_SECOND;
-    const hold = await who.usage.hold(period, { inputCost: estimate, maxOutput: 0, outputPrice: 1, minOutput: 0 });
-    if (!hold.ok) return hold.reason === 'busy' ? send(429, { status: 429, message: 'Too many requests at once. Try again in a moment.' }) : usedUp();
+    const hold = await voiceHold(env, request, estimate);
+    if (!hold.ok) return refused(hold);
     const ext = /wav/.test(type) ? 'wav' : /mpeg|mp3/.test(type) ? 'mp3' : /mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /webm/.test(type) ? 'webm' : 'wav';
     const form = new FormData();
     form.append('audio', new Blob([audio], { type }), `speech.${ext}`);
@@ -602,12 +639,12 @@ async function voice(request, env, path, headers) {
       res = await fish('/v1/asr', { method: 'POST', headers: { model: 'transcribe-1' }, body: form });
       data = await res.json().catch(() => ({}));
     } catch {
-      await who.usage.settle(period, hold.id, 0);
+      await hold.settle(0);
       return send(502, { status: 502, message: "Couldn't reach Fish Audio." });
     }
     // Fish Audio bills the recording's length, rounded up to the second; failed requests are free.
     const seconds = Number(data?.duration) > 0 ? Number(data.duration) : estimate / ASR_PRICE_PER_SECOND;
-    await who.usage.settle(period, hold.id, res.ok ? Math.ceil(seconds) * ASR_PRICE_PER_SECOND : 0);
+    await hold.settle(res.ok ? Math.ceil(seconds) * ASR_PRICE_PER_SECOND : 0);
     if (!res.ok) return send(res.status === 402 ? 503 : res.status, { status: res.status, message: res.status === 402 ? "Nova's voice service is out of credit right now." : data?.message || `Fish Audio returned an error (${res.status}).` });
     return send(200, data);
   }
@@ -621,8 +658,8 @@ async function voice(request, env, path, headers) {
   const bytes = new TextEncoder().encode(text).length;
   const asked = request.headers.get('model') || '';
   let model = TTS_MODELS.has(asked) ? asked : 's2.1-pro';
-  const hold = await who.usage.hold(period, { inputCost: bytes * TTS_PRICE[model], maxOutput: 0, outputPrice: 1, minOutput: 0 });
-  if (!hold.ok) return hold.reason === 'busy' ? send(429, { status: 429, message: 'Too many requests at once. Try again in a moment.' }) : usedUp();
+  const hold = await voiceHold(env, request, bytes * TTS_PRICE[model]);
+  if (!hold.ok) return refused(hold);
   const speed = Math.min(2, Math.max(0.5, Number(body?.prosody?.speed) || 1));
   const payload = JSON.stringify({
     text,
@@ -640,10 +677,10 @@ async function voice(request, env, path, headers) {
     // Your Fish Audio account ran out of credit: keep talking on the free model.
     if (res.status === 402 && model !== 's2.1-pro-free') { model = 's2.1-pro-free'; res = await speak(model); }
   } catch {
-    await who.usage.settle(period, hold.id, 0);
+    await hold.settle(0);
     return send(502, { status: 502, message: "Couldn't reach Fish Audio." });
   }
-  await who.usage.settle(period, hold.id, res.ok ? bytes * TTS_PRICE[model] : 0);
+  await hold.settle(res.ok ? bytes * TTS_PRICE[model] : 0);
   if (!res.ok) {
     const msg = await res.json().then((d) => d?.message).catch(() => '');
     return send(res.status, { status: res.status, message: msg || `Fish Audio returned an error (${res.status}).` });
@@ -683,7 +720,7 @@ async function setupProblems(env) {
   if (!linkRef(env)) problems.push('Add STRIPE_PAYMENT_LINK: your Payment Link\'s ID (plink_…) or address (https://buy.stripe.com/…).');
   const ai = await claudeProblem(env);
   if (ai) problems.push(ai);
-  if (!env.FISH_API_KEY) problems.push("Add FISH_API_KEY (a secret) so members can talk with James's voice.");
+  if (!env.FISH_API_KEY) problems.push("Add FISH_API_KEY (a secret) so everyone hears Nova in James's voice.");
   if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return problems;
   try {
     const link = await paymentLink(env);
@@ -741,7 +778,7 @@ export default {
     }
     // The voice routes' own health check, in the shape of a Nova voice server.
     if (request.method === 'GET' && path === '/voice') {
-      return json(200, { service: 'nova-voice', ok: voiceEnabled(env), premium: true, features: ['tts', 'asr'], serverKey: voiceEnabled(env), voice: JAMES, originAllowed: !origin || originOk }, { 'Access-Control-Allow-Origin': origin || '*' });
+      return json(200, { service: 'nova-voice', ok: voiceEnabled(env), features: ['tts', 'asr'], serverKey: voiceEnabled(env), voice: JAMES, limits: voiceEnabled(env) ? { perVisitorPerDay: visitorDaily(env), totalPerDay: siteDaily(env) } : null, originAllowed: !origin || originOk }, { 'Access-Control-Allow-Origin': origin || '*' });
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: originOk ? 204 : 403, headers: cors });
     if (!originOk) return json(403, { message: `This premium server doesn't accept requests from ${origin || 'unknown sites'}. Add it to ALLOWED_ORIGINS.` });
