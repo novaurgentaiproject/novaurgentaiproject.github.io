@@ -2,10 +2,13 @@
 
 **Nova 3 Martia** is a Premium model. Everyone can use the other five Nova models for free; Martia needs **Nova Premium**.
 
-Premium members chat with Martia **without an API key of their own**. The small **Nova premium server** in this folder (a Cloudflare Worker):
+Premium members chat with Martia and talk with **James** **without any API keys of their own**. The small **Nova premium server** in this folder (a Cloudflare Worker):
 
 - **sells memberships.** People pay through a [Stripe Payment Link](https://docs.stripe.com/payment-links), and the server confirms each purchase with Stripe.
-- **answers members' Martia chats** with your Claude API key, on Claude Opus 5.5. Each member gets a monthly allowance, so no one can cost you more than they pay.
+- **answers members' Martia chats** with your Claude API key, on Claude Opus 5.5.
+- **gives members James's voice** with your Fish Audio API key: Nova speaks in James's voice and hears them through Fish Audio, on every device (including iPhone and iPad, where the browser's own speech recognition is unreliable).
+
+Each member gets a monthly allowance that covers both, so no one can cost you more than they pay. Free users keep their device's built-in voice.
 
 You can also hand out **Premium codes** to yourself, friends or testers.
 
@@ -19,10 +22,11 @@ With the price at **$9.99 a month**:
 |---|---|
 | Member pays | $9.99 |
 | Stripe's fee (2.9% + 30¢ for US cards; varies by country) | about −$0.59 |
-| Most their Martia chats can cost you (`MONTHLY_AI_BUDGET`) | up to −$4.70 |
+| Most their Martia chats and James's voice can cost you (`MONTHLY_AI_BUDGET`) | up to −$4.70 |
 | **You keep** | **at least about $4.70**, more when members use less |
 
 - **What a Martia reply costs:** Claude Opus 5.5 is $4 per million input tokens and $20 per million output tokens. A typical reply costs about 3–6¢, so $4.70 covers roughly 80–150 replies a month. Long conversations, attachments and long answers cost more.
+- **What James costs:** Fish Audio charges $15 per million bytes of text spoken (about 1¢ for a 600-character reply) and $0.36 per hour of listening (about 0.1¢ for a 10-second question). A voice conversation mostly costs what its Martia replies cost.
 - **Cloudflare:** the free plan is enough to start. If very long answers start failing with a "Worker exceeded CPU time" error, switch to Workers Paid ($5 a month).
 - **Taxes:** depending on where you and your members live, you may owe sales tax or VAT on memberships. [Stripe Tax](https://stripe.com/tax) can work it out.
 
@@ -30,6 +34,7 @@ With the price at **$9.99 a month**:
 
 - **A Stripe account** ([stripe.com](https://stripe.com)). Stripe asks for your identity and a bank account before it pays you. The account holder must be at least 18; a parent or guardian can open it otherwise.
 - **A Claude Console account** with billing set up ([console.anthropic.com](https://console.anthropic.com)). This is what pays for members' Martia chats.
+- **A Fish Audio account** with API credit ([fish.audio](https://fish.audio)). This is what pays for James's voice.
 - **A Cloudflare account** (free, [dash.cloudflare.com](https://dash.cloudflare.com)).
 - **A terms page.** Stripe expects your site to show what you sell, its price, how to contact you, and your refund and cancellation policy.
 
@@ -80,6 +85,11 @@ If a permission is missing, the server's health page says which one.
 2. Open **Settings → Limits** and set a **monthly spend limit** a little above what you expect. It's a safety net in case something goes wrong.
 3. Open **API keys → Create key**, name it `Nova premium server`, and copy it. You'll only see it once.
 
+## 3b. Create a Fish Audio API key
+
+1. At [fish.audio](https://fish.audio), open **API** billing and add credit. (If it runs out, the server switches James to Fish Audio's free model, which may sound different or be slower.)
+2. Open **API keys** ([fish.audio/app/api-keys](https://fish.audio/app/api-keys)), create a key named `Nova premium server`, and copy it.
+
 ## 4. Deploy the premium server
 
 The server uses the Claude SDK, so Cloudflare builds it from this folder. Pick one way:
@@ -112,8 +122,9 @@ In the Worker, open **Settings → Variables and Secrets**, add these, then depl
 
 - `STRIPE_SECRET_KEY`, type **Secret**: your restricted key (`rk_live_…` or, while testing, `rk_test_…`).
 - `ANTHROPIC_API_KEY`, type **Secret**: your Claude API key.
+- `FISH_API_KEY`, type **Secret**: your Fish Audio API key.
 - `STRIPE_PAYMENT_LINK`, type **Text**: the Payment Link address from step 1 (`https://buy.stripe.com/…`) or its ID (`plink_…`). Only purchases made through this link unlock Premium.
-- `MONTHLY_AI_BUDGET`, type **Text** (optional): each member's monthly Martia allowance in US dollars. Defaults to `4.70`.
+- `MONTHLY_AI_BUDGET`, type **Text** (optional): each member's monthly allowance for Martia and James, in US dollars. Defaults to `4.70`.
 - `PREMIUM_CODES`, type **Secret** (optional): gift codes, separated by commas. See [Premium codes](#premium-codes).
 
 ### Check that it's running
@@ -121,7 +132,7 @@ In the Worker, open **Settings → Variables and Secrets**, add these, then depl
 Open the Worker's address (`https://nova-premium.your-name.workers.dev`) in a browser. When everything is set up you'll see:
 
 ```json
-{"service":"nova-premium","ok":true,"stripe":true,"mode":"live","paymentLink":true,"martia":{"included":true,"model":"claude-opus-5-5","monthlyBudget":4.7},"codes":0,"originAllowed":true,"problems":[]}
+{"service":"nova-premium","ok":true,"stripe":true,"mode":"live","paymentLink":true,"martia":{"included":true,"model":"claude-opus-5-5","monthlyBudget":4.7},"voice":{"included":true,"name":"James"},"codes":0,"originAllowed":true,"problems":[]}
 ```
 
 If `ok` is `false`, `problems` lists what to fix, such as a missing key, a link it can't find, or a missing redirect.
@@ -134,18 +145,19 @@ Put the Worker's address in `PREMIUM_SERVER` near the top of [`js/premium.js`](.
 export const PREMIUM_SERVER = 'https://nova-premium.your-name.workers.dev';
 ```
 
-Then open Nova and tap **Upgrade**. You should see your price and "No API key needed". To test in Stripe's test mode, pay with card number `4242 4242 4242 4242`, any future date and any CVC. Martia's replies use real Claude credits even in Stripe's test mode.
+Then open Nova and tap **Upgrade**. You should see your price, "No API key needed" and "Talk with James". To test in Stripe's test mode, pay with card number `4242 4242 4242 4242`, any future date and any CVC. Martia's replies use real Claude credits even in Stripe's test mode.
 
-## How the Martia allowance works
+## How the allowance works
 
-- **Members see it** in **Settings → Premium** ("Nova 3 Martia this month: 12% used · refills on Dec 3").
+- **One allowance covers both** Martia's replies and James's voice. Members see it in **Settings → Premium** ("Premium allowance this month: 12% used · refills on Dec 3").
 - **It refills** on each member's billing date. Gift codes and one-time purchases refill on the 1st of each month. A gift code's allowance is shared by everyone who uses that code.
 - **Before each reply**, the server counts the conversation's tokens (free) and holds the most the reply could cost. When the reply finishes, it charges what Claude actually billed and releases the rest. That way a member can never go over, even with replies running on two devices at once. Near the end of the allowance, replies get a lower length limit so they fit.
 - **Limits per reply:** up to 20,000 output tokens, and conversations up to 100,000 input tokens. Members are asked to start a new chat after that.
 - **Stopped replies:** if a member stops a reply, the server cancels it at Claude and charges an estimate of what was generated.
 - **Refusal fallbacks:** if Claude's safety checks decline a request, Claude may finish it on a fallback model. The server charges each model's own price.
-- **When it runs out,** Martia explains when it refills, and suggests switching to a free model or connecting their own Claude key in **Settings → Engine**. If they've connected their own key, Nova uses it automatically.
-- **Privacy:** the server passes members' Martia conversations to Claude and back. It keeps only each member's usage total for the month, not their chats.
+- **James's voice** is charged exactly: each spoken clip by the bytes of its text, each recording by its length in seconds. Failed requests cost nothing.
+- **When it runs out,** Martia explains when it refills, and suggests switching to a free model or connecting their own Claude key in **Settings → Engine**. If they've connected their own key, Nova uses it automatically. Voice mode switches to the device's own voice and speech recognition until the allowance refills.
+- **Privacy:** the server passes members' Martia conversations to Claude, and what James says plus members' voice recordings to Fish Audio. It keeps only each member's usage total for the month, not their chats or recordings.
 
 ## Premium codes
 
@@ -168,7 +180,8 @@ People enter codes in Nova's Upgrade screen (**Have a Premium code or key?**) or
 | `STRIPE_SECRET_KEY` (secret) | For payments | Stripe restricted key (or secret key) used to confirm purchases. |
 | `STRIPE_PAYMENT_LINK` | For payments | The Payment Link people buy Premium with: `plink_…` or `https://buy.stripe.com/…`. |
 | `ANTHROPIC_API_KEY` (secret) | For included Martia | Your Claude API key. Members' Martia chats are billed to it. |
-| `MONTHLY_AI_BUDGET` | No | Each member's monthly Claude allowance in US dollars. Default `4.70`. |
+| `FISH_API_KEY` (secret) | For included voice | Your Fish Audio API key. Members' James voice (speaking and listening) is billed to it. |
+| `MONTHLY_AI_BUDGET` | No | Each member's monthly allowance for Martia and James, in US dollars. Default `4.70`. |
 | `PREMIUM_CODES` (secret) | No | Comma-separated gift codes that unlock Premium. |
 | `ALLOWED_ORIGINS` | No | Comma-separated sites allowed to use the server. Defaults to `https://novaurgentaiproject.github.io` plus localhost. |
 

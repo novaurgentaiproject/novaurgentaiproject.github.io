@@ -14,6 +14,10 @@
 // holds the most it could cost, and charges the member's allowance what it really
 // cost once it finishes. Allowances live in a Durable Object (one per member).
 //
+// James's voice included: members talk with Nova in James's voice (Fish Audio
+// text-to-speech), and Nova hears them through Fish Audio speech-to-text, with
+// YOUR Fish Audio key. Voice use comes out of the same monthly allowance.
+//
 // Environment (Workers → your worker → Settings → Variables and Secrets):
 //   STRIPE_SECRET_KEY    (secret) a Stripe restricted key (rk_live_…) or secret
 //                        key (sk_live_…). See README.md for the permissions.
@@ -23,8 +27,11 @@
 //   ANTHROPIC_API_KEY    (secret) your Claude API key, used for members' Martia
 //                        chats. Without it, Premium only unlocks Martia for
 //                        people who bring their own key.
-//   MONTHLY_AI_BUDGET    (optional) each member's monthly Claude allowance in US
-//                        dollars. Default 4.70.
+//   FISH_API_KEY         (secret) your Fish Audio API key, for members' voice
+//                        (James speaking, and listening). Without it, members
+//                        use their device's voice.
+//   MONTHLY_AI_BUDGET    (optional) each member's monthly allowance in US dollars
+//                        of Claude and Fish Audio usage. Default 4.70.
 //   PREMIUM_CODES        (secret, optional) comma-separated gift codes that
 //                        unlock Premium. Remove a code to switch it off.
 //   ALLOWED_ORIGINS      (optional) comma-separated sites allowed to use this
@@ -96,8 +103,9 @@ async function paymentLink(env) {
 /** Price and checkout address, for Nova's Upgrade screen. */
 async function plan(env) {
   const ai = aiInfo(env);
-  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai };
-  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai };
+  const voice = voiceInfo(env);
+  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice };
+  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice };
   const link = await paymentLink(env);
   let result;
   if (!link) result = { available: false, reason: 'link-not-found' };
@@ -117,7 +125,7 @@ async function plan(env) {
     };
   }
   planCache = { ref: linkRef(env), at: Date.now(), plan: result };
-  return { ...result, ai };
+  return { ...result, ai, voice };
 }
 
 const norm = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -314,7 +322,7 @@ export class MemberUsage extends DurableObject {
   async hold(period, { inputCost, maxOutput, outputPrice, minOutput }) {
     const s = await this.#load();
     this.#roll(s, period);
-    if (Object.keys(s.holds).length >= 3) { await this.#save(); return { ok: false, reason: 'busy' }; }
+    if (Object.keys(s.holds).length >= 8) { await this.#save(); return { ok: false, reason: 'busy' }; }
     const left = period.budget - s.spent - this.#held(s);
     const outTokens = Math.min(maxOutput, Math.floor((left - inputCost) / outputPrice));
     if (outTokens < minOutput) { await this.#save(); return { ok: false, reason: 'allowance', left: Math.max(0, left) }; }
@@ -532,6 +540,122 @@ async function memberUsage(env, key) {
 }
 
 // ---------------------------------------------------------------------------
+// James's voice included (Fish Audio)
+// ---------------------------------------------------------------------------
+const JAMES = '802e3bc2b27e49c2995d23ef70e6ac89';
+const FISH_API = 'https://api.fish.audio';
+const TTS_MODELS = new Set(['s2.1-pro', 's2-pro', 's1', 's2.1-pro-free']);
+const AUDIO_FORMATS = new Set(['mp3', 'wav', 'opus']);
+// Fish Audio prices: speech in $ per million UTF-8 bytes of text (µ$ per byte),
+// listening $0.36 per audio hour (100 µ$ per second, rounded up to the second).
+const TTS_PRICE = { 's2.1-pro': 15, 's2-pro': 15, s1: 15, 's2.1-pro-free': 0 };
+const ASR_PRICE_PER_SECOND = 100;
+const MAX_TTS_CHARS = 1500;
+const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+
+const voiceEnabled = (env) => !!(env.FISH_API_KEY && env.USAGE);
+function voiceInfo(env) {
+  return voiceEnabled(env) ? { included: true, name: 'James' } : { included: false };
+}
+
+/** Seconds of audio in a recording: exact for WAV, a generous estimate otherwise. */
+function audioSeconds(buf, type) {
+  const v = new DataView(buf);
+  if (/wav/.test(type) && buf.byteLength > 44 && v.getUint32(0, false) === 0x52494646) { // "RIFF"
+    const byteRate = v.getUint32(28, true);
+    if (byteRate > 0) return (buf.byteLength - 44) / byteRate;
+  }
+  return buf.byteLength / 2000; // compressed speech is rarely under 16 kbit/s
+}
+
+/** POST /voice/v1/tts and /voice/v1/asr: a member's speech, on the server's Fish Audio key. */
+async function voice(request, env, path, headers) {
+  const send = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  if (!voiceEnabled(env)) return send(404, { status: 404, message: "James's voice isn't included on this server." });
+  const key = request.headers.get('x-api-key') || /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') || '')?.[1] || '';
+  if (!key || key.length > 300) return send(401, { status: 401, message: 'Add your Premium key in Settings → Premium.' });
+  let who;
+  try { who = await memberFor(env, key); } catch { return send(503, { status: 503, message: "Couldn't confirm your Premium membership right now." }); }
+  if (!who.member?.premium) return send(403, { status: 403, message: `${MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended} James's voice isn't included any more.` });
+  const period = periodFor(env, who.member);
+  const usedUp = () => send(402, { status: 402, message: "this month's Premium allowance is used up", reason: 'allowance_exhausted', resets_at: period.resetsAt });
+  const fish = (p, init) => fetch(`${env.FISH_API_BASE || FISH_API}${p}`, { ...init, headers: { Authorization: `Bearer ${env.FISH_API_KEY}`, ...init.headers } });
+
+  if (path === '/voice/v1/asr') {
+    const type = (request.headers.get('Content-Type') || 'audio/wav').split(';')[0].trim();
+    if (!/^audio\/|^video\/|^application\/octet-stream$/.test(type)) return send(415, { status: 415, message: 'Send the recording as the request body with an audio/* Content-Type.' });
+    const audio = await request.arrayBuffer();
+    if (!audio.byteLength) return send(400, { status: 400, message: 'The recording is empty.' });
+    if (audio.byteLength > MAX_AUDIO_BYTES) return send(413, { status: 413, message: 'The recording is too long.' });
+    const estimate = Math.ceil(audioSeconds(audio, type)) * ASR_PRICE_PER_SECOND;
+    const hold = await who.usage.hold(period, { inputCost: estimate, maxOutput: 0, outputPrice: 1, minOutput: 0 });
+    if (!hold.ok) return hold.reason === 'busy' ? send(429, { status: 429, message: 'Too many requests at once. Try again in a moment.' }) : usedUp();
+    const ext = /wav/.test(type) ? 'wav' : /mpeg|mp3/.test(type) ? 'mp3' : /mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /webm/.test(type) ? 'webm' : 'wav';
+    const form = new FormData();
+    form.append('audio', new Blob([audio], { type }), `speech.${ext}`);
+    const lang = (new URL(request.url).searchParams.get('language') || '').toLowerCase();
+    if (/^[a-z]{2}$/.test(lang)) form.append('language', lang);
+    form.append('ignore_timestamps', 'true');
+    let res;
+    let data = {};
+    try {
+      res = await fish('/v1/asr', { method: 'POST', headers: { model: 'transcribe-1' }, body: form });
+      data = await res.json().catch(() => ({}));
+    } catch {
+      await who.usage.settle(period, hold.id, 0);
+      return send(502, { status: 502, message: "Couldn't reach Fish Audio." });
+    }
+    // Fish Audio bills the recording's length, rounded up to the second; failed requests are free.
+    const seconds = Number(data?.duration) > 0 ? Number(data.duration) : estimate / ASR_PRICE_PER_SECOND;
+    await who.usage.settle(period, hold.id, res.ok ? Math.ceil(seconds) * ASR_PRICE_PER_SECOND : 0);
+    if (!res.ok) return send(res.status === 402 ? 503 : res.status, { status: res.status, message: res.status === 402 ? "Nova's voice service is out of credit right now." : data?.message || `Fish Audio returned an error (${res.status}).` });
+    return send(200, data);
+  }
+
+  // Text to speech
+  let body;
+  try { body = await request.json(); } catch { return send(400, { status: 400, message: 'Expected a JSON body.' }); }
+  const text = String(body?.text ?? '').trim();
+  if (!text) return send(400, { status: 400, message: 'Text is empty.' });
+  if (text.length > MAX_TTS_CHARS) return send(413, { status: 413, message: `Text is longer than ${MAX_TTS_CHARS} characters.` });
+  const bytes = new TextEncoder().encode(text).length;
+  const asked = request.headers.get('model') || '';
+  let model = TTS_MODELS.has(asked) ? asked : 's2.1-pro';
+  const hold = await who.usage.hold(period, { inputCost: bytes * TTS_PRICE[model], maxOutput: 0, outputPrice: 1, minOutput: 0 });
+  if (!hold.ok) return hold.reason === 'busy' ? send(429, { status: 429, message: 'Too many requests at once. Try again in a moment.' }) : usedUp();
+  const speed = Math.min(2, Math.max(0.5, Number(body?.prosody?.speed) || 1));
+  const payload = JSON.stringify({
+    text,
+    reference_id: /^[0-9a-f]{32}$/i.test(String(body?.reference_id || '')) ? String(body.reference_id) : JAMES,
+    format: AUDIO_FORMATS.has(body?.format) ? body.format : 'mp3',
+    mp3_bitrate: [64, 128, 192].includes(body?.mp3_bitrate) ? body.mp3_bitrate : 128,
+    latency: ['low', 'normal', 'balanced'].includes(body?.latency) ? body.latency : 'balanced',
+    normalize: body?.normalize !== false,
+    prosody: { speed, volume: 0 },
+  });
+  const speak = (m) => fish('/v1/tts', { method: 'POST', headers: { 'Content-Type': 'application/json', model: m }, body: payload });
+  let res;
+  try {
+    res = await speak(model);
+    // Your Fish Audio account ran out of credit: keep talking on the free model.
+    if (res.status === 402 && model !== 's2.1-pro-free') { model = 's2.1-pro-free'; res = await speak(model); }
+  } catch {
+    await who.usage.settle(period, hold.id, 0);
+    return send(502, { status: 502, message: "Couldn't reach Fish Audio." });
+  }
+  await who.usage.settle(period, hold.id, res.ok ? bytes * TTS_PRICE[model] : 0);
+  if (!res.ok) {
+    const msg = await res.json().then((d) => d?.message).catch(() => '');
+    return send(res.status, { status: res.status, message: msg || `Fish Audio returned an error (${res.status}).` });
+  }
+  const out = new Headers(headers);
+  out.set('Content-Type', res.headers.get('Content-Type') || 'audio/mpeg');
+  out.set('Cache-Control', 'no-store');
+  out.set('X-Nova-Model', model);
+  return new Response(res.body, { status: 200, headers: out });
+}
+
+// ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
 let claudeCheck = null;
@@ -559,6 +683,7 @@ async function setupProblems(env) {
   if (!linkRef(env)) problems.push('Add STRIPE_PAYMENT_LINK: your Payment Link\'s ID (plink_…) or address (https://buy.stripe.com/…).');
   const ai = await claudeProblem(env);
   if (ai) problems.push(ai);
+  if (!env.FISH_API_KEY) problems.push("Add FISH_API_KEY (a secret) so members can talk with James's voice.");
   if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return problems;
   try {
     const link = await paymentLink(env);
@@ -608,16 +733,22 @@ export default {
         stripe: !!key, mode: /^(sk|rk)_live_/.test(key) ? 'live' : /^(sk|rk)_test_/.test(key) ? 'test' : null,
         paymentLink: !!linkRef(env),
         martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
+        voice: voiceInfo(env),
         codes: String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length,
         originAllowed: !origin || originOk,
         problems,
       }, { 'Access-Control-Allow-Origin': origin || '*' });
+    }
+    // The voice routes' own health check, in the shape of a Nova voice server.
+    if (request.method === 'GET' && path === '/voice') {
+      return json(200, { service: 'nova-voice', ok: voiceEnabled(env), premium: true, features: ['tts', 'asr'], serverKey: voiceEnabled(env), voice: JAMES, originAllowed: !origin || originOk }, { 'Access-Control-Allow-Origin': origin || '*' });
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: originOk ? 204 : 403, headers: cors });
     if (!originOk) return json(403, { message: `This premium server doesn't accept requests from ${origin || 'unknown sites'}. Add it to ALLOWED_ORIGINS.` });
 
     try {
       if (request.method === 'POST' && path === '/ai/v1/messages') return await martia(request, env, ctx, cors);
+      if (request.method === 'POST' && (path === '/voice/v1/tts' || path === '/voice/v1/asr')) return await voice(request, env, path, cors);
       if (request.method === 'GET' && path === '/v1/plan') return json(200, await plan(env));
       if (request.method === 'POST' && ['/v1/verify', '/v1/portal', '/v1/usage'].includes(path)) {
         let body;
@@ -631,6 +762,6 @@ export default {
       if (e instanceof StripeError) return json(502, { message: e.status === 401 ? "The premium server's Stripe key was rejected." : `Stripe: ${e.message}` });
       return json(500, { message: 'The premium server hit an unexpected error.' });
     }
-    return json(404, { message: 'Not found. Use GET /v1/plan, POST /v1/verify, /v1/usage or /v1/portal, or POST /ai/v1/messages.' });
+    return json(404, { message: 'Not found. Use GET /v1/plan; POST /v1/verify, /v1/usage or /v1/portal; POST /ai/v1/messages; or POST /voice/v1/tts or /voice/v1/asr.' });
   },
 };

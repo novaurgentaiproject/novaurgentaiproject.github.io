@@ -9,6 +9,8 @@ Fish Audio doesn't let websites call its API directly: it sends no CORS headers,
 
 Until a voice server is set up, Nova uses the device's built-in voice and speech recognition.
 
+**Selling Nova Premium?** You don't need this separate server for members: the [premium server](../premium-server/README.md) includes James's voice for Premium members (set `FISH_API_KEY` there), counted in their monthly allowance. Use this voice server only to give James to *everyone*, or for your own use with your own key.
+
 ## 1. Get a Fish Audio API key
 
 1. Sign in at [fish.audio](https://fish.audio).

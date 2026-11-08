@@ -948,6 +948,11 @@ div.premium { display: flex; flex-direction: column; gap: 14px; }
 .pm-code { font-size: 14px; }
 .pm-code summary { cursor: pointer; color: var(--text-2); text-align: center; list-style: none; padding: 2px 0; }
 .pm-code summary::-webkit-details-marker { display: none; }
+.vs-own { margin-top: 2px; }
+.vs-own > summary { cursor: pointer; font-size: 13px; color: var(--text-3); padding: 4px 0; }
+.vs-own[open] > summary { margin-bottom: 8px; }
+.vs-own > .s-help { margin-bottom: 10px; }
+.vs-own .vs-field { display: flex; margin-bottom: 10px; }
 .pm-code summary:hover { color: var(--text); }
 .pm-code[open] summary { margin-bottom: 10px; }
 .pm-redeem { display: flex; gap: 8px; align-items: center; }

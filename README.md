@@ -28,6 +28,7 @@ Accounts run on Firebase (free Spark plan), in the `nova-ai-7b8d5` project. [Set
 Nova 3 Martia needs **Nova Premium**; the other five models are free. Free users see Martia with a lock, and an **Upgrade** button opens the Premium screen. Built-in agents that use Martia run on Nova 2 Flash for free users.
 
 - **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
+- **James included:** members talk with James's voice in voice mode and read-aloud (Fish Audio, through the premium server), and Nova hears them through Fish Audio on every device. It comes out of the same monthly allowance. Free users keep the device's built-in voice.
 - **Martia included:** members chat with Martia without an API key. The premium server answers with your Claude key, and gives each member a monthly allowance (default $4.70 of Claude usage, set by `MONTHLY_AI_BUDGET`). It counts each message before sending it, so a member can't go over. **Settings → Premium** shows how much is left. When it runs out, members can switch to a free model or use their own Claude key.
 - **Premium codes:** unlock Premium for yourself, friends or testers, with or without the server.
 - **With accounts on**, buying Premium asks people to log in first, and Premium is saved to their account.
@@ -102,4 +103,4 @@ __/auth/, __/firebase/ Firebase's sign-in helper pages, hosted here so Google si
 - With Claude connected, messages go directly to Anthropic's API under your key.
 - With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.
 - Accounts (when logged in): chats, memory, custom agents, personalization and Premium are stored in Firebase under your account, readable only by you. API keys stay on your device.
-- Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends it to the premium server to confirm your membership. Members' Nova 3 Martia chats (the conversation and its attachments) go through the premium server to Anthropic's API to be answered; the server keeps only each member's monthly usage total, not the chats.
+- Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends it to the premium server to confirm your membership. Members' Nova 3 Martia chats (the conversation and its attachments) go through the premium server to Anthropic's API to be answered, and in voice mode what James says and members' recordings go through it to Fish Audio; the server keeps only each member's monthly usage total, not the chats or recordings.

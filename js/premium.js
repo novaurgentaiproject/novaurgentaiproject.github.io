@@ -276,6 +276,25 @@ export function martiaIncluded() {
   return !!premiumServer() && cached?.server === premiumServer() && !!cached.plan?.ai?.included;
 }
 
+/** True when the premium server includes James's voice (Fish Audio) for members. */
+export function voiceIncluded() {
+  const cached = read(LS_PLAN);
+  return !!premiumServer() && cached?.server === premiumServer() && !!cached.plan?.voice?.included;
+}
+
+/** Where a member's voice requests go (James speaking, and listening), or null. */
+export function premiumVoice() {
+  if (!isPremium() || !state?.key || !voiceIncluded() || allowanceInfo()?.usedUp) return null;
+  return { base: `${premiumServer()}/voice`, key: state.key };
+}
+
+/** A member used James's voice: refresh the allowance shortly (once per burst of use). */
+let voiceRefresh = null;
+export function noteVoiceUse() {
+  clearTimeout(voiceRefresh);
+  voiceRefresh = setTimeout(() => refreshAllowance(), 15e3);
+}
+
 /** This month's allowance as last reported by the server: { left, budget, fraction, resetsAt, usedUp }. */
 export function allowanceInfo() {
   if (!allowance || allowance.key !== state?.key) return null;
@@ -358,6 +377,7 @@ export function openPremium({ modelId = PREMIUM_MODELS[0], onUnlock = null, onFa
 <li>${icon('layout', 'icon-sm')}<span><b>Interactive answers.</b> Builds calculators, simulations and visual explorers right into its replies.</span></li>
 <li>${icon('compass', 'icon-sm')}<span><b>Thorough and well-organized.</b> Comprehensive answers for complex topics, research and analysis.</span></li>
 <li data-engine>${icon('sparkles', 'icon-sm')}<span><b>Runs on ${esc(claudeLabel())}</b> when Claude is connected.</span></li>
+<li data-voice hidden>${icon('waveform', 'icon-sm')}<span><b>Talk with James.</b> Voice mode speaks and listens with James's natural voice, on every device.</span></li>
 </ul>
 <div class="pm-plan" data-plan><span class="shimmer-text">Loading plans…</span></div>
 <button class="btn primary pm-cta" data-buy hidden>${icon('crown', 'icon-sm')} Upgrade to Premium</button>
@@ -374,6 +394,7 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
   const showPlan = (plan) => {
     const buy = $('[data-buy]');
     if (plan?.ai?.included) $('[data-engine]').innerHTML = `${icon('sparkles', 'icon-sm')}<span><b>No API key needed.</b> Martia is included, powered by Claude, with a monthly allowance that covers plenty of everyday chats.</span>`;
+    if (plan?.voice?.included) $('[data-voice]').hidden = false;
     if (plan?.available && /^https:\/\//.test(plan.url || '')) {
       const parts = priceParts(plan);
       $('[data-plan]').innerHTML = `${parts ? `<div class="pm-price"><b>${esc(parts.money)}</b><span>${esc(parts.per)}</span></div>` : '<div class="pm-price"><span>Choose your price at checkout</span></div>'}${plan.trialDays ? `<div class="pm-trial">${plan.trialDays}-day free trial</div>` : ''}`;
@@ -389,7 +410,7 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
       };
       // When accounts are on, Premium belongs to an account, so log in first.
       buy.onclick = () => { if (!hooks.requireAccount || hooks.requireAccount(go, 'Log in or sign up to get Premium. It stays with your account on every device.')) go(); };
-      $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}${plan.ai?.included ? " Members' Martia chats are sent through Nova's premium server to Anthropic (Claude) to be answered." : ''}`;
+      $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}${plan.ai?.included ? " Members' Martia chats are sent through Nova's premium server to Anthropic (Claude) to be answered." : ''}${plan.voice?.included ? " Voice mode sends what James says, and your recordings, to Fish Audio." : ''}`;
     } else {
       $('[data-plan]').innerHTML = `<div class="pm-soon">${icon('clock', 'icon-sm')}<span>Premium sign-ups aren't open yet. If you have a Premium code, enter it below.</span></div>`;
       buy.hidden = true;
@@ -507,7 +528,8 @@ export function premiumSettingsHTML() {
     const line = !a ? 'Checking your allowance…'
       : a.usedUp ? `Used up for this month. Refills on ${esc(shortDate(a.resetsAt))}.`
         : `${pct}% used${a.resetsAt ? ` · refills on ${esc(shortDate(a.resetsAt))}` : ''}`;
-    rows.push(`<div class="setting col"><div><div class="s-label">${esc(m.name)} this month</div><div class="s-help">Included with Premium, no API key needed. ${line}</div></div><div class="pm-meter${a && (a.usedUp || a.fraction > 0.85) ? ' low' : ''}" role="progressbar" aria-label="${esc(m.name)} allowance used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct ?? 0}"><span style="width:${pct ?? 0}%"></span></div></div>`);
+    const covers = voiceIncluded() ? `Covers ${esc(m.name)} and James's voice. ` : '';
+    rows.push(`<div class="setting col"><div><div class="s-label">${voiceIncluded() ? 'Premium allowance' : `${esc(m.name)}`} this month</div><div class="s-help">Included with Premium, no API key needed. ${covers}${line}</div></div><div class="pm-meter${a && (a.usedUp || a.fraction > 0.85) ? ' low' : ''}" role="progressbar" aria-label="${esc(m.name)} allowance used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct ?? 0}"><span style="width:${pct ?? 0}%"></span></div></div>`);
   }
   if (state?.key) {
     rows.push(`<div class="setting"><div><div class="s-label">Premium key</div><div class="s-help">Enter it on your other devices, or in Nova on your Home Screen, to unlock Premium there. Keep it private: anyone with it can use your membership.</div><code class="pm-mask">${esc(maskKey(state.key))}</code></div><button class="btn sm" data-copykey>${icon('copy', 'icon-sm')} Copy</button></div>`);

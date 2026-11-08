@@ -4,6 +4,7 @@ import { settings, saveSettings, on } from '../state.js';
 import { stripMarkdown, formatDuration, h, esc } from '../util.js';
 import { icon } from '../icons.js';
 import { canCloudRecord, primeAudioContext, recordUtterance, transcribe } from './hearing.js';
+import { premiumVoice, voiceIncluded, isPremium, noteVoiceUse, noteAllowanceUsedUp } from '../premium.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 export const canRecognize = !!SR;
@@ -188,10 +189,28 @@ export const JAMES_VOICE_ID = '802e3bc2b27e49c2995d23ef70e6ac89';
 export const DEFAULT_VOICE_SERVER = ''; // set to your deployed Worker URL to give every visitor James's voice
 export const VOICE_SERVER_GUIDE = 'https://github.com/novaurgentaiproject/novaurgentaiproject.github.io/blob/HEAD/voice-server/README.md';
 
-export function fishServer() {
-  return String(settings.fishServer || DEFAULT_VOICE_SERVER || '').trim().replace(/\/+$/, '').replace(/\/v1\/tts$/, '');
+const cleanBase = (u) => String(u || '').trim().replace(/\/+$/, '').replace(/\/v1\/tts$/, '');
+/**
+ * Where Nova sends speech: the person's own voice server (Settings → Speech),
+ * Nova Premium's (members get James included), or the site's default server.
+ */
+function fishEndpoint() {
+  if (settings.fishServer?.trim()) return { base: cleanBase(settings.fishServer), key: settings.fishKey?.trim() || '' };
+  const pv = premiumVoice();
+  if (pv) return { base: pv.base, key: pv.key, premium: true };
+  if (DEFAULT_VOICE_SERVER) return { base: cleanBase(DEFAULT_VOICE_SERVER), key: settings.fishKey?.trim() || '' };
+  return null;
 }
+export function fishServer() { return fishEndpoint()?.base || ''; }
 export const fishConfigured = () => !!fishServer();
+/** True when James's voice comes with the person's Nova Premium membership. */
+export const fishViaPremium = () => !!fishEndpoint()?.premium;
+/** Why James isn't available yet, for people who haven't set anything up. */
+export function fishSetupHint() {
+  if (voiceIncluded() && !isPremium()) return `${fishVoiceLabel()}'s voice is part of Nova Premium. Until then, Nova uses this device's voice.`;
+  if (voiceIncluded() && isPremium()) return `This month's Premium allowance is used up. Until it refills, Nova uses this device's voice.`;
+  return `${fishVoiceLabel()} needs the Nova voice server. Set it up in Settings → Speech; until then Nova uses this device's voice.`;
+}
 let fishDownUntil = 0, fishLastError = '';
 /** True when Nova should speak with James (Fish Audio) right now. */
 export function usingFish() {
@@ -212,11 +231,12 @@ function fishMessage(status, msg) {
 
 /** Synthesize `text` with the Fish Audio voice. Resolves to an object URL of an MP3. */
 export async function fishSynth(text, { signal, model } = {}) {
-  const base = fishServer();
+  const ep = fishEndpoint();
+  const base = ep?.base;
   if (!base) throw new FishError('no voice server is set up');
   model = model || settings.fishModel || 's2.1-pro';
   const headers = { 'Content-Type': 'application/json', model };
-  if (settings.fishKey?.trim()) headers.Authorization = `Bearer ${settings.fishKey.trim()}`;
+  if (ep.key) headers.Authorization = `Bearer ${ep.key}`;
   let res;
   try {
     res = await fetch(`${base}/v1/tts`, {
@@ -229,6 +249,13 @@ export async function fishSynth(text, { signal, model } = {}) {
   } catch (e) {
     if (e?.name === 'AbortError') throw e;
     throw new FishError(/api\.fish\.audio/.test(base) ? 'Fish Audio blocks direct browser requests, so use the Nova voice server' : "couldn't reach the voice server");
+  }
+  // Nova Premium: 402 means the member's monthly allowance is used up.
+  if (ep.premium && res.status === 402) {
+    let d = {};
+    try { d = await res.json(); } catch {}
+    noteAllowanceUsedUp(d.resets_at);
+    throw new FishError("this month's Premium allowance is used up", 402);
   }
   // Accounts without API credit can still use Fish Audio's free model.
   if (res.status === 402 && model !== 's2.1-pro-free') {
@@ -243,6 +270,7 @@ export async function fishSynth(text, { signal, model } = {}) {
   }
   const blob = await res.blob();
   if (!blob.size) throw new FishError('the voice server sent back empty audio');
+  if (ep.premium) noteVoiceUse();
   return URL.createObjectURL(/^audio\//.test(blob.type) ? blob : new Blob([blob], { type: 'audio/mpeg' }));
 }
 
@@ -668,7 +696,8 @@ export function openVoiceMode({ modelName, onUserText }) {
     const auto = pickVoice();
     const fishSel = settings.ttsEngine === 'fish';
     const sel = (v) => (!fishSel && v === (settings.voice || '') ? ' selected' : '');
-    const fish = `<optgroup label="Fish Audio"><option value="fish"${fishSel ? ' selected' : ''}>${esc(fishVoiceLabel())}${fishConfigured() ? '' : ' (needs setup)'}</option></optgroup>`;
+    const fishNote = fishConfigured() ? '' : voiceIncluded() && !isPremium() ? ' (Premium)' : voiceIncluded() ? ' (allowance used up)' : ' (needs setup)';
+    const fish = `<optgroup label="${voiceIncluded() ? 'Nova Premium' : 'Fish Audio'}"><option value="fish"${fishSel ? ' selected' : ''}>${esc(fishVoiceLabel())}${fishNote}</option></optgroup>`;
     const device = canSpeak ? `<optgroup label="This device"><option value="device:"${sel('')}>Automatic${auto ? ` · ${esc(auto.name)}` : ''}</option>${list.map((v) => `<option value="device:${esc(v.voiceURI)}"${sel(v.voiceURI)}>${esc(v.name)}${v.localService === false ? ' · online' : ''}</option>`).join('')}</optgroup>` : '';
     return fish + device;
   };
@@ -898,8 +927,10 @@ export function openVoiceMode({ modelName, onUserText }) {
       silentStreak = 0;
       setState('transcribing', 'Understanding…');
       let text = '';
-      try { text = await transcribe(res.wav, { base: fishServer(), key: settings.fishKey?.trim() }); }
+      const ep = fishEndpoint();
+      try { text = await transcribe(res.wav, { base: ep?.base, key: ep?.key, premium: !!ep?.premium }); if (ep?.premium) noteVoiceUse(); }
       catch (e) {
+        if (ep?.premium && e.status === 402) noteAllowanceUsedUp(e.resetsAt);
         if (closed || token !== listenToken || state !== 'transcribing') return;
         if (SR) { mode = 'device'; setState('paused', `Fish Audio couldn't transcribe that (${e.message}), so Nova is switching to this device's speech recognition.`); setTimeout(listen, 2600); }
         else { setState('paused', `Nova couldn't understand the recording: ${e.message}. Tap the orb to try again, or type below.`); showType(true); }
@@ -998,7 +1029,7 @@ export function openVoiceMode({ modelName, onUserText }) {
     turn++;
     stopSpeaker();
     if (v === 'fish' && !fishConfigured()) {
-      setState('paused', `${fishVoiceLabel()} needs the Nova voice server. Set it up in Settings → Speech; until then Nova uses this device's voice. Tap the orb to keep talking.`);
+      setState('paused', `${fishSetupHint()} Tap the orb to keep talking.`);
       return;
     }
     setState('speaking', 'Speaking — tap the orb to interrupt');
