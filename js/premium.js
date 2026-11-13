@@ -29,7 +29,7 @@ export const FREE_MODEL = DEFAULT_MODEL;
  * Until it's set, nobody can buy Premium, but Premium codes still work.
  * Setup guide: premium-server/README.md
  */
-export const PREMIUM_SERVER = '';
+export const PREMIUM_SERVER = 'https://nova-premium.rsaldana74.workers.dev';
 export const PREMIUM_GUIDE = 'https://github.com/novaurgentaiproject/novaurgentaiproject.github.io/blob/HEAD/premium-server/README.md';
 
 /**

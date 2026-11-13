@@ -407,7 +407,7 @@ const apiError = (status, type, message, extra = {}) => [status, { type: 'error'
 
 /** POST /ai/v1/messages: a member's Martia reply, streamed in Claude's format. */
 async function martia(request, env, ctx, headers) {
-  const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
   if (!aiEnabled(env)) return send(apiError(400, 'not_configured', "Martia isn't included with Premium on this server yet. Connect your own Claude key in Settings → Engine, or try again later."));
   // The member's Premium key arrives where the Claude SDK puts an API key: in
   // x-api-key or, in newer SDK versions, as an Authorization bearer token.
@@ -611,7 +611,7 @@ function audioSeconds(buf, type) {
 
 /** POST /voice/v1/tts and /voice/v1/asr: anyone's speech, on the server's Fish Audio key. */
 async function voice(request, env, path, headers) {
-  const send = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  const send = (status, body) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
   if (!voiceEnabled(env)) return send(404, { status: 404, message: "James's voice isn't set up on this server." });
   const refused = (h) => h.reason === 'busy'
     ? send(429, { status: 429, reason: 'busy', message: 'too many voice requests at once' })
@@ -756,7 +756,7 @@ export default {
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
     };
-    const json = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extra } });
+    const json = (status, body, extra = {}) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra } });
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
