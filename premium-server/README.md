@@ -94,13 +94,17 @@ The server uses the Claude SDK, so Cloudflare builds it from this folder. Pick o
 
 ### Option A: from GitHub, in the Cloudflare dashboard (works on an iPad)
 
-1. In [dash.cloudflare.com](https://dash.cloudflare.com), go to **Workers & Pages → Create → Import a repository**, and connect your GitHub account if asked.
-2. Choose this repository. Set:
-   - **Project name:** `nova-premium`
+1. In [dash.cloudflare.com](https://dash.cloudflare.com), go to **Workers & Pages → Create application**, then choose **GitHub**.
+2. If asked, sign in to GitHub and install the **Cloudflare Workers & Pages** app. Choose **Only select repositories** and pick this repository.
+3. Select this repository from the list. Under **Configure your project**, set:
+   - **Name:** `nova-premium` (it must match `name` in [`wrangler.toml`](wrangler.toml), or the build fails)
+   - **Git branch:** the branch Nova's site is published from (this repository's default branch, not necessarily `main`)
    - **Build command:** `npm install`
    - **Deploy command:** `npx wrangler deploy`
-   - **Path** (under **Advanced settings**, sometimes called the root directory): `premium-server`
-3. Click **Deploy**. Cloudflare redeploys automatically whenever this folder changes on GitHub.
+   - **Root directory:** `premium-server`
+4. Select **Save and Deploy**. Cloudflare redeploys automatically whenever that branch changes on GitHub.
+
+Don't put your keys under **Build variables and secrets**: those only exist while building. The server's keys go in the Worker's settings (step 5).
 
 ### Option B: with Wrangler, on a computer
 
@@ -116,7 +120,7 @@ Create a Cloudflare API token with the **Edit Cloudflare Workers** template (**M
 
 ## 5. Add the server's settings
 
-In the Worker, open **Settings → Variables and Secrets**, add these, then deploy again (or click **Deploy** on the latest version):
+In the Worker, open **Settings → Variables and Secrets** (not the build settings), add these, then deploy again (or click **Deploy** on the latest version):
 
 - `STRIPE_SECRET_KEY`, type **Secret**: your restricted key (`rk_live_…` or, while testing, `rk_test_…`).
 - `ANTHROPIC_API_KEY`, type **Secret**: your Claude API key.
