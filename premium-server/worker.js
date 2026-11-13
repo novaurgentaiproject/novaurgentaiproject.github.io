@@ -108,8 +108,10 @@ async function paymentLink(env) {
 /** Price and checkout address, for Nova's Upgrade screen. */
 async function plan(env) {
   const ai = aiInfo(env);
-  const voice = voiceInfo(env);
+  const voice = await voiceInfo(env);
   if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice };
+  // Premium's main feature is Martia's answers; don't sell it until they're included.
+  if (!aiEnabled(env)) return { available: false, reason: 'martia-not-ready', ai, voice };
   if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice };
   const link = await paymentLink(env);
   let result;
@@ -559,6 +561,25 @@ const MAX_TTS_CHARS = 1500;
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 
 const voiceEnabled = (env) => !!(env.FISH_API_KEY && env.USAGE);
+
+// Your Fish Audio API credit, checked at most every 10 minutes. With none, James
+// talks on the free model and Nova listens with the device's own recognition
+// (Fish Audio has no free listening model).
+let fishCredit = null; // { at, credit } — credit is null when it couldn't be read
+async function fishHasCredit(env) {
+  if (fishCredit && Date.now() - fishCredit.at < 10 * 60e3) return fishCredit.credit == null ? true : fishCredit.credit > 0;
+  let credit = null;
+  try {
+    const res = await fetch(`${env.FISH_API_BASE || FISH_API}/wallet/self/api-credit`, { headers: { Authorization: `Bearer ${env.FISH_API_KEY}` } });
+    if (res.ok) {
+      const n = Number.parseFloat((await res.json())?.credit);
+      if (Number.isFinite(n)) credit = n;
+    }
+  } catch { /* unknown: assume there is credit, and fall back on a 402 */ }
+  fishCredit = { at: Date.now(), credit };
+  return credit == null ? true : credit > 0;
+}
+const noteNoFishCredit = () => { fishCredit = { at: Date.now(), credit: 0 }; };
 function dollarsSetting(v, fallback) {
   if (v == null || String(v).trim() === '') return fallback;
   const n = Number.parseFloat(v);
@@ -566,8 +587,10 @@ function dollarsSetting(v, fallback) {
 }
 const visitorDaily = (env) => dollarsSetting(env.VOICE_DAILY_PER_VISITOR, 0.5);
 const siteDaily = (env) => dollarsSetting(env.VOICE_DAILY_TOTAL, 5);
-function voiceInfo(env) {
-  return voiceEnabled(env) ? { included: true, everyone: true, name: 'James', dailyPerVisitor: visitorDaily(env), dailyTotal: siteDaily(env) } : { included: false };
+async function voiceInfo(env) {
+  if (!voiceEnabled(env)) return { included: false };
+  const paid = await fishHasCredit(env);
+  return { included: true, everyone: true, name: 'James', listening: paid, model: paid ? 's2.1-pro' : 's2.1-pro-free', dailyPerVisitor: visitorDaily(env), dailyTotal: siteDaily(env) };
 }
 
 /** Today (UTC) as an allowance period, with a budget in µ$ (0 dollars = no limit). */
@@ -619,6 +642,7 @@ async function voice(request, env, path, headers) {
   const fish = (p, init) => fetch(`${env.FISH_API_BASE || FISH_API}${p}`, { ...init, headers: { Authorization: `Bearer ${env.FISH_API_KEY}`, ...init.headers } });
 
   if (path === '/voice/v1/asr') {
+    if (!(await fishHasCredit(env))) return send(503, { status: 503, reason: 'no_credit', message: "listening through Fish Audio isn't available on this site" });
     const type = (request.headers.get('Content-Type') || 'audio/wav').split(';')[0].trim();
     if (!/^audio\/|^video\/|^application\/octet-stream$/.test(type)) return send(415, { status: 415, message: 'Send the recording as the request body with an audio/* Content-Type.' });
     const audio = await request.arrayBuffer();
@@ -645,7 +669,8 @@ async function voice(request, env, path, headers) {
     // Fish Audio bills the recording's length, rounded up to the second; failed requests are free.
     const seconds = Number(data?.duration) > 0 ? Number(data.duration) : estimate / ASR_PRICE_PER_SECOND;
     await hold.settle(res.ok ? Math.ceil(seconds) * ASR_PRICE_PER_SECOND : 0);
-    if (!res.ok) return send(res.status === 402 ? 503 : res.status, { status: res.status, message: res.status === 402 ? "Nova's voice service is out of credit right now." : data?.message || `Fish Audio returned an error (${res.status}).` });
+    if (res.status === 402) noteNoFishCredit();
+    if (!res.ok) return send(res.status === 402 ? 503 : res.status, { status: res.status, reason: res.status === 402 ? 'no_credit' : undefined, message: res.status === 402 ? "listening through Fish Audio isn't available on this site" : data?.message || `Fish Audio returned an error (${res.status}).` });
     return send(200, data);
   }
 
@@ -658,6 +683,7 @@ async function voice(request, env, path, headers) {
   const bytes = new TextEncoder().encode(text).length;
   const asked = request.headers.get('model') || '';
   let model = TTS_MODELS.has(asked) ? asked : 's2.1-pro';
+  if (model !== 's2.1-pro-free' && !(await fishHasCredit(env))) model = 's2.1-pro-free';
   const hold = await voiceHold(env, request, bytes * TTS_PRICE[model]);
   if (!hold.ok) return refused(hold);
   const speed = Math.min(2, Math.max(0.5, Number(body?.prosody?.speed) || 1));
@@ -675,7 +701,7 @@ async function voice(request, env, path, headers) {
   try {
     res = await speak(model);
     // Your Fish Audio account ran out of credit: keep talking on the free model.
-    if (res.status === 402 && model !== 's2.1-pro-free') { model = 's2.1-pro-free'; res = await speak(model); }
+    if (res.status === 402 && model !== 's2.1-pro-free') { noteNoFishCredit(); model = 's2.1-pro-free'; res = await speak(model); }
   } catch {
     await hold.settle(0);
     return send(502, { status: 502, message: "Couldn't reach Fish Audio." });
@@ -770,7 +796,7 @@ export default {
         stripe: !!key, mode: /^(sk|rk)_live_/.test(key) ? 'live' : /^(sk|rk)_test_/.test(key) ? 'test' : null,
         paymentLink: !!linkRef(env),
         martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
-        voice: voiceInfo(env),
+        voice: await voiceInfo(env),
         codes: String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length,
         originAllowed: !origin || originOk,
         problems,
@@ -778,7 +804,8 @@ export default {
     }
     // The voice routes' own health check, in the shape of a Nova voice server.
     if (request.method === 'GET' && path === '/voice') {
-      return json(200, { service: 'nova-voice', ok: voiceEnabled(env), features: ['tts', 'asr'], serverKey: voiceEnabled(env), voice: JAMES, limits: voiceEnabled(env) ? { perVisitorPerDay: visitorDaily(env), totalPerDay: siteDaily(env) } : null, originAllowed: !origin || originOk }, { 'Access-Control-Allow-Origin': origin || '*' });
+      const listening = voiceEnabled(env) && await fishHasCredit(env);
+      return json(200, { service: 'nova-voice', ok: voiceEnabled(env), features: listening ? ['tts', 'asr'] : ['tts'], serverKey: voiceEnabled(env), voice: JAMES, limits: voiceEnabled(env) ? { perVisitorPerDay: visitorDaily(env), totalPerDay: siteDaily(env) } : null, originAllowed: !origin || originOk }, { 'Access-Control-Allow-Origin': origin || '*' });
     }
     if (request.method === 'OPTIONS') return new Response(null, { status: originOk ? 204 : 403, headers: cors });
     if (!originOk) return json(403, { message: `This premium server doesn't accept requests from ${origin || 'unknown sites'}. Add it to ALLOWED_ORIGINS.` });

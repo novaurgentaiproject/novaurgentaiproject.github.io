@@ -10,7 +10,7 @@ Premium members chat with Martia **without an API key of their own**, and **ever
 
 You can also hand out **Premium codes** to yourself, friends or testers.
 
-Until the premium server is set up, nobody can buy Premium. Nova shows "Premium sign-ups aren't open yet", and Premium codes still work.
+Until the premium server is set up, nobody can buy Premium. Nova shows "Premium sign-ups aren't open yet", and Premium codes still work. Sign-ups also stay closed until `ANTHROPIC_API_KEY` is added, because Premium's main feature, Martia's answers, needs it.
 
 ## The money
 
@@ -167,7 +167,7 @@ Then open Nova and tap **Upgrade**. You should see your price and "No API key ne
 - **Each request is counted exactly:** each spoken sentence by the bytes of its text, each recording by its length in seconds. Failed requests count nothing.
 - **Two limits per day** (they reset at midnight UTC): one per visitor (`VOICE_DAILY_PER_VISITOR`, default $0.50) and one for the whole site (`VOICE_DAILY_TOTAL`, default $5.00). Visitors are told apart by their internet address, which Cloudflare provides; people sharing a network (such as a school or office) share one limit.
 - **Past a limit,** Nova quietly switches to the device's own voice and speech recognition until the next day, with a short note.
-- **If your Fish Audio credit runs out,** the server switches James to Fish Audio's free model, which may sound different or be slower.
+- **Without Fish Audio credit** (a new account, or when it runs out), James talks on Fish Audio's free model, which may sound different or be slower, and Nova listens with the device's own speech recognition, since Fish Audio has no free listening model. The server checks your balance every 10 minutes and switches back by itself once you add credit.
 - **Privacy:** the server passes members' Martia conversations to Claude, and what James says plus people's voice recordings to Fish Audio. It keeps only usage totals (each member's for the month; each visitor's voice use for the day, under a scrambled form of their internet address), not chats or recordings.
 
 ## Premium codes

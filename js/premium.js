@@ -284,7 +284,8 @@ export function martiaIncluded() {
 export function siteVoice() {
   const cached = read(LS_PLAN);
   const on = !!premiumServer() && cached?.server === premiumServer() && !!cached.plan?.voice?.included;
-  return on ? { base: `${premiumServer()}/voice` } : null;
+  // listening: false when the site's Fish Audio account has no credit (no free listening model).
+  return on ? { base: `${premiumServer()}/voice`, listening: cached.plan.voice.listening !== false } : null;
 }
 
 /** This month's allowance as last reported by the server: { left, budget, fraction, resetsAt, usedUp }. */

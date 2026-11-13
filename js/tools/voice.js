@@ -198,7 +198,7 @@ const cleanBase = (u) => String(u || '').trim().replace(/\/+$/, '').replace(/\/v
 function fishEndpoint() {
   if (settings.fishServer?.trim()) return { base: cleanBase(settings.fishServer), key: settings.fishKey?.trim() || '' };
   const sv = siteVoice();
-  if (sv) return { base: sv.base, key: '', site: true };
+  if (sv) return { base: sv.base, key: '', site: true, listening: sv.listening };
   if (DEFAULT_VOICE_SERVER) return { base: cleanBase(DEFAULT_VOICE_SERVER), key: settings.fishKey?.trim() || '' };
   return null;
 }
@@ -651,7 +651,8 @@ const IS_IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel'
 const IS_SAFARI = /Safari\//.test(UA) && !/Chrome\/|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPR\/|Android/.test(UA);
 const WEBKIT_STT = IS_IOS || IS_SAFARI;
 const isStandalone = () => document.documentElement.classList.contains('standalone') || navigator.standalone === true;
-const cloudListening = () => canCloudRecord && fishConfigured();
+// Fish Audio listening needs a voice server that can transcribe (the site's may not have credit for it).
+const cloudListening = () => canCloudRecord && fishConfigured() && fishEndpoint()?.listening !== false;
 
 /** How voice mode hears you: the browser's speech recognition ('device'), Fish Audio through the voice server ('cloud'), or neither. */
 export function listenMode() {
