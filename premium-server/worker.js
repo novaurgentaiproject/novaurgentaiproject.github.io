@@ -41,6 +41,10 @@
 //                        per day, in US dollars. Default 5.00. 0 = no limit.
 //   MONTHLY_AI_BUDGET    (optional) each member's monthly Claude allowance in US
 //                        dollars. Default 4.70.
+//   TEST_MODE_BUDGET     (optional) the monthly Claude allowance for purchases
+//                        made while STRIPE_SECRET_KEY is a test key. Default 0.50.
+//                        (In test mode, the Upgrade button only shows to people
+//                        who open Nova with ?preview=premium, i.e. you.)
 //   PREMIUM_CODES        (secret, optional) comma-separated gift codes that
 //                        unlock Premium. Remove a code to switch it off.
 //   ALLOWED_ORIGINS      (optional) comma-separated sites allowed to use this
@@ -110,13 +114,18 @@ async function paymentLink(env) {
 }
 
 /** Price and checkout address, for Nova's Upgrade screen. */
-async function plan(env) {
+const stripeTestMode = (env) => /^(sk|rk)_test_/.test(String(env.STRIPE_SECRET_KEY || ''));
+
+async function plan(env, { preview = false } = {}) {
   const ai = aiInfo(env);
   const voice = await voiceInfo(env);
   if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice };
+  // Test mode: anyone could "pay" with Stripe's public test card, so only show the
+  // plan to the site owner (who opens Nova with ?preview=premium).
+  if (stripeTestMode(env) && !preview) return { available: false, reason: 'test-mode', ai, voice };
   // Premium's main feature is Martia's answers; don't sell it until they're included.
   if (!aiEnabled(env)) return { available: false, reason: 'martia-not-ready', ai, voice };
-  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice };
+  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice, ...(stripeTestMode(env) ? { testMode: true } : {}) };
   const link = await paymentLink(env);
   let result;
   if (!link) result = { available: false, reason: 'link-not-found' };
@@ -136,7 +145,7 @@ async function plan(env) {
     };
   }
   planCache = { ref: linkRef(env), at: Date.now(), plan: result };
-  return { ...result, ai, voice };
+  return { ...result, ai, voice, ...(stripeTestMode(env) ? { testMode: true } : {}) };
 }
 
 const norm = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -271,9 +280,17 @@ function replyCost(usage, model) {
   return Math.ceil(usageCost(usage, model));
 }
 
+/** The monthly Claude allowance for purchases made in Stripe's test mode, in dollars. */
+function testModeBudget(env) {
+  const n = Number.parseFloat(env.TEST_MODE_BUDGET);
+  return Number.isFinite(n) && n >= 0 ? n : 0.5;
+}
+
 /** The member's current allowance period: their billing period, or the calendar month. */
 function periodFor(env, m) {
-  const perMonth = monthlyBudget(env) * 1e6;
+  // Purchases made with a Stripe test key get only a small allowance: test
+  // payments cost nothing, but their Martia replies spend real Claude credit.
+  const perMonth = (m.kind === 'stripe' && stripeTestMode(env) ? Math.min(testModeBudget(env), monthlyBudget(env)) : monthlyBudget(env)) * 1e6;
   if (m.kind === 'stripe' && m.periodStart && m.periodEnd) {
     const months = { day: 1 / 30, week: 7 / 30, month: 1, year: 12 }[m.interval] ?? 1;
     return { id: `p${m.periodStart}`, resetsAt: m.periodEnd, budget: Math.round(perMonth * months * (m.intervalCount || 1)) };
@@ -819,7 +836,7 @@ export default {
     try {
       if (request.method === 'POST' && path === '/ai/v1/messages') return await martia(request, env, ctx, cors);
       if (request.method === 'POST' && (path === '/voice/v1/tts' || path === '/voice/v1/asr')) return await voice(request, env, path, cors);
-      if (request.method === 'GET' && path === '/v1/plan') return json(200, await plan(env));
+      if (request.method === 'GET' && path === '/v1/plan') return json(200, await plan(env, { preview: url.searchParams.get('preview') === '1' }));
       if (request.method === 'POST' && ['/v1/verify', '/v1/portal', '/v1/usage'].includes(path)) {
         let body;
         try { body = await request.json(); } catch { return json(400, { message: 'Expected a JSON body.' }); }

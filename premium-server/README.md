@@ -48,7 +48,9 @@ Nova re-checks memberships every 6 hours, and the server checks again at least e
 
 ## 1. Create the Payment Link in Stripe
 
-Try everything in **test mode** first (the "Test mode" switch in the Stripe Dashboard), then repeat the steps in live mode.
+Try everything in **test mode** first (the "Test mode" or "Sandbox" switch in the Stripe Dashboard), then repeat the steps in live mode.
+
+**While your Stripe key is a test key,** the server protects your Claude credit: the public sees "Premium sign-ups aren't open yet" (anyone could "pay" with Stripe's public test card), and test purchases get only a $0.50 monthly Claude allowance (). To see the Upgrade screen yourself, open  on your device ( to stop). When you switch to a live key, sign-ups open to everyone with the full allowance.
 
 1. Sign in at [dashboard.stripe.com](https://dashboard.stripe.com) and open **Payment Links**, then **Create payment link** (or **+ New**).
 2. Add a product called **Nova Premium**, priced at **$9.99**, **Recurring**, **Monthly**.
@@ -193,6 +195,7 @@ People enter codes in Nova's Upgrade screen (**Have a Premium code or key?**) or
 | `STRIPE_PAYMENT_LINK` | For payments | The Payment Link people buy Premium with: `plink_…` or `https://buy.stripe.com/…`. |
 | `ANTHROPIC_API_KEY` (secret) | For included Martia | Your Claude API key. Members' Martia chats are billed to it. |
 | `FISH_API_KEY` (secret) | For James's voice | Your Fish Audio API key. Everyone's use of James (speaking and listening) is billed to it. |
+| `TEST_MODE_BUDGET` | No | Monthly Claude allowance for purchases made with a Stripe test key, in US dollars. Default `0.50`. |
 | `MONTHLY_AI_BUDGET` | No | Each member's monthly Martia allowance in US dollars. Default `4.70`. |
 | `FISH_PAID` | No | `true` to use Fish Audio's paid voice and listening (billed to your Fish credit). Without it, James uses the free model and costs nothing. |
 | `VOICE_DAILY_PER_VISITOR` | No | Most one visitor's use of James can cost per day, in US dollars. Default `0.50`; `0` = no limit. |

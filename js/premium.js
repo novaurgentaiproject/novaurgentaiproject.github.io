@@ -68,6 +68,21 @@ addEventListener('storage', (e) => { if (e.key === LS) { state = read(LS); emit(
 /** Let the app supply actions the Premium screens can trigger (e.g. switching model). */
 export function setPremiumHooks(h) { hooks = { ...hooks, ...h }; }
 
+// The site owner's preview: open Nova with ?preview=premium to see the Upgrade
+// screen while Stripe is still in test mode (?preview=off to stop).
+const LS_PREVIEW = 'nova:premium-preview';
+try {
+  const q = new URLSearchParams(location.search);
+  const pv = q.get('preview');
+  if (pv === 'premium' || pv === 'off') {
+    pv === 'premium' ? localStorage.setItem(LS_PREVIEW, '1') : localStorage.removeItem(LS_PREVIEW);
+    q.delete('preview');
+    const qs = q.toString();
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+  }
+} catch { /* storage unavailable */ }
+const previewing = () => { try { return localStorage.getItem(LS_PREVIEW) === '1'; } catch { return false; } };
+
 export function premiumServer() {
   let s = PREMIUM_SERVER;
   try { s = localStorage.getItem('nova:premium-server') || s; } catch { /* storage unavailable */ }
@@ -233,13 +248,15 @@ export async function importPremium(data) {
 export async function loadPlan({ fresh = false } = {}) {
   const cached = read(LS_PLAN);
   if (!premiumServer()) return null;
-  if (!fresh && cached && cached.server === premiumServer() && Date.now() - cached.at < 30 * 60e3) return cached.plan;
+  const preview = previewing();
+  const same = cached && cached.server === premiumServer() && !!cached.preview === preview;
+  if (!fresh && same && Date.now() - cached.at < 30 * 60e3) return cached.plan;
   try {
-    const plan = await call('/v1/plan');
-    try { localStorage.setItem(LS_PLAN, JSON.stringify({ at: Date.now(), server: premiumServer(), plan })); } catch { /* storage unavailable */ }
+    const plan = await call(`/v1/plan${preview ? '?preview=1' : ''}`);
+    try { localStorage.setItem(LS_PLAN, JSON.stringify({ at: Date.now(), server: premiumServer(), preview, plan })); } catch { /* storage unavailable */ }
     return plan;
   } catch {
-    return cached?.server === premiumServer() ? cached.plan : null;
+    return same ? cached.plan : null;
   }
 }
 
@@ -388,7 +405,7 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
     if (plan?.ai?.included) $('[data-engine]').innerHTML = `${icon('sparkles', 'icon-sm')}<span><b>No API key needed.</b> Martia is included, powered by Claude, with a monthly allowance that covers plenty of everyday chats.</span>`;
     if (plan?.available && /^https:\/\//.test(plan.url || '')) {
       const parts = priceParts(plan);
-      $('[data-plan]').innerHTML = `${parts ? `<div class="pm-price"><b>${esc(parts.money)}</b><span>${esc(parts.per)}</span></div>` : '<div class="pm-price"><span>Choose your price at checkout</span></div>'}${plan.trialDays ? `<div class="pm-trial">${plan.trialDays}-day free trial</div>` : ''}`;
+      $('[data-plan]').innerHTML = `${parts ? `<div class="pm-price"><b>${esc(parts.money)}</b><span>${esc(parts.per)}</span></div>` : '<div class="pm-price"><span>Choose your price at checkout</span></div>'}${plan.trialDays ? `<div class="pm-trial">${plan.trialDays}-day free trial</div>` : ''}${plan.testMode ? '<div class="pm-trial">Test mode: only you can see this. Pay with card 4242 4242 4242 4242, any future date and CVC.</div>' : ''}`;
       buy.hidden = false;
       const go = () => {
         buy.disabled = true;
