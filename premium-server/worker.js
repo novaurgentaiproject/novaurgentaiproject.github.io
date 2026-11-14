@@ -747,6 +747,8 @@ async function voice(request, env, path, headers) {
 let claudeCheck = null;
 async function claudeProblem(env) {
   if (!env.ANTHROPIC_API_KEY) return 'Add ANTHROPIC_API_KEY (a secret) so members can chat with Martia without a key of their own.';
+  const key = env.ANTHROPIC_API_KEY;
+  if (/[^\x21-\x7e]/.test(key)) return 'ANTHROPIC_API_KEY contains spaces or characters that are never part of a key (such as \u2026 from a shortened display). Copy the whole key again and paste it as the value.';
   if (!env.USAGE) return 'The USAGE Durable Object binding is missing. Deploy with the wrangler.toml in this folder.';
   if (claudeCheck && Date.now() - claudeCheck.at < CACHE_MS) return claudeCheck.problem;
   let problem = null;
@@ -754,9 +756,11 @@ async function claudeProblem(env) {
     const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined, maxRetries: 0 });
     await anthropic.messages.countTokens({ model: MARTIA_MODEL, messages: [{ role: 'user', content: 'ping' }] });
   } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) problem = 'Anthropic rejected ANTHROPIC_API_KEY. Create a new key in the Claude Console and update the secret.';
+    // Claude Console API keys start with sk-ant-api; other Claude tokens don't work here.
+    const hint = key.startsWith('sk-ant-api') ? '' : ' This key doesn\'t look like a Claude Console API key (those start with sk-ant-api): create one under API keys at platform.claude.com.';
+    if (e instanceof Anthropic.AuthenticationError) problem = `Anthropic rejected ANTHROPIC_API_KEY.${hint || ' Create a new key in the Claude Console and update the secret.'}`;
     else if (e instanceof Anthropic.PermissionDeniedError) problem = `The Anthropic key can't use ${MARTIA_MODEL}.`;
-    else if (!(e instanceof Anthropic.RateLimitError)) problem = `Couldn't check the Anthropic key: ${e.message}`;
+    else if (!(e instanceof Anthropic.RateLimitError)) problem = `Couldn't check the Anthropic key: ${e.message}.${hint}`;
   }
   claudeCheck = { at: Date.now(), problem };
   return problem;
@@ -790,8 +794,14 @@ async function setupProblems(env) {
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+// Keys pasted on a phone or tablet often pick up spaces, line breaks or quotes.
+const KEY_NAMES = ['ANTHROPIC_API_KEY', 'STRIPE_SECRET_KEY', 'FISH_API_KEY', 'STRIPE_PAYMENT_LINK'];
+const cleanKey = (v) => (typeof v === 'string' ? v.trim().replace(/^["'`]+|["'`]+$/g, '').trim() : v);
+
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, rawEnv, ctx) {
+    const env = { ...rawEnv };
+    for (const k of KEY_NAMES) if (env[k] != null) env[k] = cleanKey(env[k]);
     const origin = request.headers.get('Origin') || '';
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
     const origins = allowed.length ? allowed : DEFAULT_ORIGINS;
