@@ -12,7 +12,7 @@ import { gatherSources, composeAnswer, AIMODE_INSTRUCTIONS, sourcesContext } fro
 import { runResearch, composeReport, RESEARCH_INSTRUCTIONS } from '../tools/research.js';
 import { makeQuiz } from '../tools/study.js';
 import { explorerWidget } from '../tools/genui.js';
-import { premiumAI, refreshAllowance, noteAllowanceUsedUp, allowanceMessage } from '../premium.js';
+import { premiumAI, refreshAllowance, noteAllowanceUsedUp, allowanceMessage, siteAI, noteFreeUsedUp } from '../premium.js';
 import { pickWidget, editWidget, isWidgetEdit } from '../tools/widgetgen.js';
 
 const IMAGE_INTENT = /^(?:please\s+)?(?:can you\s+|could you\s+|i want you to\s+)?(?:generate|create|make|draw|paint|render|design|imagine|produce|show me|give me)\s+(?:me\s+)?(?:an?\s+|the\s+|some\s+|\d+\s+)?(?:[\w-]+\s+){0,3}?(?:image|picture|photo|illustration|drawing|painting|artwork|wallpaper|portrait|logo|icon|art|poster|render|scene)s?\b|^(?:draw|paint|sketch|illustrate)\s+/i;
@@ -26,7 +26,8 @@ const bumpEffort = (e) => ({ low: 'medium', medium: 'high', high: 'xhigh', xhigh
 
 /**
  * How a reply reaches Claude: Nova Premium's included Martia (through the premium
- * server), the visitor's own API key, or not at all (the on-device engine).
+ * server), the visitor's own API key, the site's free Claude chats (Haiku, within
+ * daily limits), or not at all (the on-device engine).
  * Members whose Martia allowance has run out use their own key if they have one;
  * otherwise `usedUp` makes the reply explain that instead of answering on-device.
  */
@@ -35,6 +36,8 @@ function claudeConn(modelId) {
   if (ai && !ai.usedUp) return { server: ai };
   if (engineReady()) return { apiKey: settings.anthropicKey, afterAllowance: !!ai };
   if (ai) return { usedUp: ai };
+  const free = siteAI(modelId);
+  if (free && !free.usedUp) return { server: free, free: true };
   return null;
 }
 const claudeOn = (ctx) => !!claudeConn(ctx.msg.model);
@@ -98,11 +101,12 @@ export async function claudePipeline(ctx, { extra = '', userSuffix = '', effortB
   let conn = claudeConn(model.id);
   if (!conn || conn.usedUp) throw Object.assign(new Error(allowanceMessage(conn?.usedUp?.resetsAt)), { code: 'allowance_exhausted' });
   v.engine = 'claude';
-  v.engineModel = conn.server ? 'claude-opus-5-5' : map.model;
+  const serverModel = conn.free ? conn.server.model : 'claude-opus-5-5';
+  v.engineModel = conn.server ? serverModel : map.model;
   const start = performance.now();
   v.thinkStart = Date.now();
   const run = (c) => claudeStream({
-    apiKey: c.apiKey, server: c.server, model: c.server ? 'claude-opus-5-5' : map.model, effort, system, messages, signal,
+    apiKey: c.apiKey, server: c.server, model: c.server ? (c.free ? c.server.model : 'claude-opus-5-5') : map.model, effort, system, messages, signal,
     onThinking: (d) => { v.thinking = (v.thinking || '') + d; ctx.update(); },
     onText: (d) => {
       if (v.thinking && !v.thinkMs) v.thinkMs = performance.now() - start;
@@ -114,6 +118,19 @@ export async function claudePipeline(ctx, { extra = '', userSuffix = '', effortB
   try {
     res = await run(conn);
   } catch (e) {
+    // Free Claude chats: when today's are used up, or Claude can't be reached,
+    // answer on-device instead of showing an error.
+    if (conn.free && e?.name !== 'AbortError' && !v.content.trim()) {
+      if (e.code === 'daily_limit') noteFreeUsedUp(e.resetsAt);
+      v.engine = 'local';
+      v.engineModel = undefined;
+      v.thinking = '';
+      v.thinkMs = 0;
+      await localPipeline(ctx);
+      v.notice = { type: 'info', text: e.code === 'daily_limit' ? "Today's free Claude replies are used up, so Nova answered on-device. They refill tomorrow." : "Couldn't reach Claude just now, so Nova answered on-device." };
+      ctx.update();
+      return;
+    }
     if (!conn.server || e.code !== 'allowance_exhausted') throw e;
     // The month's allowance ran out: carry on with the member's own key, if any.
     noteAllowanceUsedUp(e.resetsAt);

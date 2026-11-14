@@ -41,6 +41,10 @@
 //                        per day, in US dollars. Default 5.00. 0 = no limit.
 //   MONTHLY_AI_BUDGET    (optional) each member's monthly Claude allowance in US
 //                        dollars. Default 4.70.
+//   FREE_AI_DAILY_TOTAL  (optional) most everyone's free Claude chats (Haiku 5.5,
+//                        every model except Martia) may cost per day, in US
+//                        dollars. Default 0.10. 0 turns free Claude chats off.
+//   FREE_AI_DAILY_PER_VISITOR (optional) one visitor's daily share. Default 0.02.
 //   TEST_MODE_BUDGET     (optional) the monthly Claude allowance for purchases
 //                        made while STRIPE_SECRET_KEY is a test key. Default 0.50.
 //                        (In test mode, the Upgrade button only shows to people
@@ -119,13 +123,14 @@ const stripeTestMode = (env) => /^(sk|rk)_test_/.test(String(env.STRIPE_SECRET_K
 async function plan(env, { preview = false } = {}) {
   const ai = aiInfo(env);
   const voice = await voiceInfo(env);
-  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice };
+  const free = freeInfo(env);
+  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice, free };
   // Test mode: anyone could "pay" with Stripe's public test card, so only show the
   // plan to the site owner (who opens Nova with ?preview=premium).
-  if (stripeTestMode(env) && !preview) return { available: false, reason: 'test-mode', ai, voice };
+  if (stripeTestMode(env) && !preview) return { available: false, reason: 'test-mode', ai, voice, free };
   // Premium's main feature is Martia's answers; don't sell it until they're included.
-  if (!aiEnabled(env)) return { available: false, reason: 'martia-not-ready', ai, voice };
-  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice, ...(stripeTestMode(env) ? { testMode: true } : {}) };
+  if (!aiEnabled(env)) return { available: false, reason: 'martia-not-ready', ai, voice, free };
+  if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice, free, ...(stripeTestMode(env) ? { testMode: true } : {}) };
   const link = await paymentLink(env);
   let result;
   if (!link) result = { available: false, reason: 'link-not-found' };
@@ -145,7 +150,7 @@ async function plan(env, { preview = false } = {}) {
     };
   }
   planCache = { ref: linkRef(env), at: Date.now(), plan: result };
-  return { ...result, ai, voice, ...(stripeTestMode(env) ? { testMode: true } : {}) };
+  return { ...result, ai, voice, free, ...(stripeTestMode(env) ? { testMode: true } : {}) };
 }
 
 const norm = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -244,6 +249,8 @@ const PRICES = {
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2 },
   'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5 },
+  // Claude Haiku 5.5, for prompts up to 100K tokens (free chats are capped well below that).
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01 },
 };
 const PRICE_UNKNOWN = { input: 5, output: 25, cacheRead: 0.5 };
 const HOLD_INPUT = PRICE_UNKNOWN.input * 1.25; // worst case: every input token written to the cache
@@ -428,31 +435,28 @@ const MEMBER_REASONS = {
 // browser reads them like any other API error. All are 4xx so it doesn't retry.
 const apiError = (status, type, message, extra = {}) => [status, { type: 'error', error: { type, message, ...extra } }];
 
-/** POST /ai/v1/messages: a member's Martia reply, streamed in Claude's format. */
-async function martia(request, env, ctx, headers) {
+/**
+ * Relay one Claude reply: count the input (free), reserve the most it could cost,
+ * stream Claude's events straight through, then charge what it really cost.
+ * `opt.reserve(inputCost, maxOutput)` returns { ok, maxTokens, settle(cost) } or { ok: false, error }.
+ */
+async function relay(request, env, ctx, headers, opt) {
   const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-  if (!aiEnabled(env)) return send(apiError(400, 'not_configured', "Martia isn't included with Premium on this server yet. Connect your own Claude key in Settings → Engine, or try again later."));
-  // The member's Premium key arrives where the Claude SDK puts an API key: in
-  // x-api-key or, in newer SDK versions, as an Authorization bearer token.
-  const key = request.headers.get('x-api-key') || /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') || '')?.[1] || '';
-  if (!key || key.length > 300) return send(apiError(401, 'authentication_error', 'Add your Premium key in Settings → Premium.'));
-
   const size = Number(request.headers.get('content-length') || 0);
-  if (size > MAX_BODY_BYTES) return send(apiError(413, 'request_too_large', 'This conversation is too big for Martia. Start a new chat, or remove some attachments.'));
+  if (size > MAX_BODY_BYTES) return send(apiError(413, 'request_too_large', `This conversation is too big for ${opt.name}. Start a new chat, or remove some attachments.`));
   let body;
   try { body = JSON.parse(await request.text()); } catch { return send(apiError(400, 'invalid_request_error', 'Expected a JSON body.')); }
   if (!Array.isArray(body?.messages) || !body.messages.length || body.messages.length > 500) return send(apiError(400, 'invalid_request_error', 'Expected a list of messages.'));
   if (body.system != null && typeof body.system !== 'string' && !Array.isArray(body.system)) return send(apiError(400, 'invalid_request_error', 'Expected a text system prompt.'));
 
-  let who;
-  try { who = await memberFor(env, key); } catch { return send(apiError(400, 'premium_check_failed', "Nova couldn't confirm your Premium membership right now. Try again in a minute.")); }
-  if (!who.member?.premium) return send(apiError(403, 'permission_error', `${MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended} Martia isn't included any more.`, { reason: who.member?.reason || 'ended' }));
-  const period = periodFor(env, who.member);
+  const who = await opt.identify();
+  if (who.error) return send(who.error);
 
   const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined, maxRetries: 1 });
-  const effort = body.output_config?.effort === 'max' ? 'xhigh' : EFFORTS.has(body.output_config?.effort) ? body.output_config.effort : 'high';
+  const asked = body.output_config?.effort;
+  const effort = opt.efforts.includes(asked) ? asked : asked === 'max' || asked === 'xhigh' ? opt.efforts[opt.efforts.length - 1] : opt.defaultEffort;
   const params = {
-    model: MARTIA_MODEL,
+    model: opt.model,
     system: body.system ?? undefined,
     messages: body.messages,
     thinking: { type: 'adaptive', display: 'summarized' },
@@ -469,24 +473,20 @@ async function martia(request, env, ctx, headers) {
     inputTokens = c.input_tokens;
   } catch (e) {
     if (e instanceof Anthropic.BadRequestError) return send(apiError(400, 'invalid_request_error', e.error?.error?.message || 'Claude rejected this message.'));
-    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return send(apiError(400, 'not_configured', "Martia isn't available right now: the server's Claude key was rejected."));
-    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', 'Martia is busy right now. Try again in a moment.'));
+    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return send(apiError(400, 'not_configured', `${opt.name} isn't available right now: the server's Claude key was rejected.`));
+    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', `${opt.name} is busy right now. Try again in a moment.`));
     return send(apiError(400, 'overloaded', "Couldn't reach Claude right now. Try again in a moment."));
   }
-  if (inputTokens > MAX_INPUT_TOKENS) return send(apiError(413, 'request_too_large', 'This conversation is too long for Martia. Start a new chat to keep going.'));
+  if (inputTokens > opt.maxInput) return send(apiError(413, 'request_too_large', `This conversation is too long for ${opt.name}. Start a new chat to keep going.`));
 
-  const hold = await who.usage.hold(period, { inputCost: inputTokens * HOLD_INPUT, maxOutput: MAX_OUTPUT_TOKENS, outputPrice: HOLD_OUTPUT, minOutput: MIN_OUTPUT_TOKENS });
-  if (!hold.ok) {
-    if (hold.reason === 'busy') return send(apiError(400, 'busy', 'Martia is already answering on your other devices. Wait for those replies to finish.'));
-    return send(apiError(402, 'allowance_exhausted', "You've used this month's Martia allowance.", { resets_at: period.resetsAt }));
-  }
+  const hold = await opt.reserve(who, inputTokens * opt.holdInput, opt.holdOutput);
+  if (!hold.ok) return send(hold.error);
   params.max_tokens = hold.maxTokens;
-
   let settled = false;
   const settle = (cost) => {
     if (settled) return Promise.resolve();
     settled = true;
-    return who.usage.settle(period, hold.id, cost).catch(() => {});
+    return hold.settle(cost).catch(() => {});
   };
 
   const abort = new AbortController();
@@ -496,12 +496,12 @@ async function martia(request, env, ctx, headers) {
     // the raw event stream, which is passed on byte for byte. Parsing every event
     // here would cost more CPU time than a Worker gets.
     upstream = await anthropic.beta.messages.create(
-      { ...params, stream: true, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' },
+      { ...params, stream: true, ...(opt.fallbacks ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {}) },
       { signal: abort.signal },
     ).asResponse();
   } catch (e) {
     ctx.waitUntil(settle(0)); // nothing was generated
-    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', 'Martia is busy right now. Try again in a moment.'));
+    if (e instanceof Anthropic.RateLimitError) return send(apiError(429, 'rate_limit_error', `${opt.name} is busy right now. Try again in a moment.`));
     if (e instanceof Anthropic.BadRequestError) return send(apiError(400, 'invalid_request_error', e.error?.error?.message || 'Claude rejected this message.'));
     if (e instanceof Anthropic.APIError && e.status >= 500) return send(apiError(400, 'overloaded', 'Claude is overloaded right now. Try again in a moment.'));
     return send(apiError(400, 'api_error', "Couldn't reach Claude right now. Try again in a moment."));
@@ -542,7 +542,7 @@ async function martia(request, env, ctx, headers) {
     } finally {
       const start = findEvent(head, 'message_start', true);
       const delta = findEvent(tail, 'message_delta');
-      const model = start?.message?.model || MARTIA_MODEL;
+      const model = start?.message?.model || opt.model;
       let usage = { ...(start?.message?.usage || { input_tokens: inputTokens }) };
       for (const [k, v] of Object.entries(delta?.usage || {})) if (v != null) usage[k] = v;
       const finished = !broken && !!delta && /event: message_stop/.test(tail);
@@ -557,6 +557,81 @@ async function martia(request, env, ctx, headers) {
   };
   ctx.waitUntil(pump());
   return new Response(readable, { status: 200, headers: { ...headers, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' } });
+}
+
+/** POST /ai/v1/messages: a member's Martia reply, streamed in Claude's format. */
+async function martia(request, env, ctx, headers) {
+  const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+  if (!aiEnabled(env)) return send(apiError(400, 'not_configured', "Martia isn't included with Premium on this server yet. Connect your own Claude key in Settings → Engine, or try again later."));
+  // The member's Premium key arrives where the Claude SDK puts an API key: in
+  // x-api-key or, in newer SDK versions, as an Authorization bearer token.
+  const key = request.headers.get('x-api-key') || /^Bearer\s+(\S+)$/i.exec(request.headers.get('authorization') || '')?.[1] || '';
+  if (!key || key.length > 300) return send(apiError(401, 'authentication_error', 'Add your Premium key in Settings → Premium.'));
+  let period;
+  return relay(request, env, ctx, headers, {
+    name: 'Martia', model: MARTIA_MODEL, fallbacks: true,
+    efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high',
+    maxInput: MAX_INPUT_TOKENS, holdInput: HOLD_INPUT, holdOutput: HOLD_OUTPUT,
+    identify: async () => {
+      let who;
+      try { who = await memberFor(env, key); } catch { return { error: apiError(400, 'premium_check_failed', "Nova couldn't confirm your Premium membership right now. Try again in a minute.") }; }
+      if (!who.member?.premium) return { error: apiError(403, 'permission_error', `${MEMBER_REASONS[who.member?.reason] || MEMBER_REASONS.ended} Martia isn't included any more.`, { reason: who.member?.reason || 'ended' }) };
+      period = periodFor(env, who.member);
+      return who;
+    },
+    reserve: async (who, inputCost, outputPrice) => {
+      const hold = await who.usage.hold(period, { inputCost, maxOutput: MAX_OUTPUT_TOKENS, outputPrice, minOutput: MIN_OUTPUT_TOKENS });
+      if (!hold.ok) {
+        return { ok: false, error: hold.reason === 'busy'
+          ? apiError(400, 'busy', 'Martia is already answering on your other devices. Wait for those replies to finish.')
+          : apiError(402, 'allowance_exhausted', "You've used this month's Martia allowance.", { resets_at: period.resetsAt }) };
+      }
+      return { ok: true, maxTokens: hold.maxTokens, settle: (cost) => who.usage.settle(period, hold.id, cost) };
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Free chats for everyone (Claude Haiku 5.5, daily limits)
+// ---------------------------------------------------------------------------
+const FREE_MODEL = 'claude-haiku-5-5';
+const FREE_MAX_OUTPUT = 8000;
+const FREE_MAX_INPUT = 50000;
+const freeDailyTotal = (env) => dollarsSetting(env.FREE_AI_DAILY_TOTAL, 0.1);
+const freeDailyPerVisitor = (env) => dollarsSetting(env.FREE_AI_DAILY_PER_VISITOR, 0.02);
+const freeEnabled = (env) => aiEnabled(env) && freeDailyTotal(env) > 0;
+function freeInfo(env) {
+  return freeEnabled(env) ? { included: true, model: FREE_MODEL, dailyTotal: freeDailyTotal(env), dailyPerVisitor: freeDailyPerVisitor(env) } : { included: false };
+}
+const visitorIp = (request) => request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For')?.split(',')[0].trim() || 'unknown';
+
+/** POST /free/v1/messages: anyone's free chat, on Claude Haiku within today's limits. */
+async function freeChat(request, env, ctx, headers) {
+  const send = ([status, body]) => new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+  if (!freeEnabled(env)) return send(apiError(400, 'not_configured', "Free Claude chats aren't on for this site."));
+  const day = (dollars) => voiceDay(dollars); // a UTC day, with a budget in µ$ (0 = no limit)
+  return relay(request, env, ctx, headers, {
+    name: 'Nova', model: FREE_MODEL, fallbacks: false,
+    efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+    maxInput: FREE_MAX_INPUT, holdInput: PRICES[FREE_MODEL].input * 1.25, holdOutput: PRICES[FREE_MODEL].output,
+    identify: async () => ({ id: `free:${await sha256hex(`ip:${visitorIp(request)}`)}` }),
+    reserve: async (who, inputCost, outputPrice) => {
+      const site = { usage: stub(env, 'free:site'), period: day(freeDailyTotal(env)) };
+      const visitor = { usage: stub(env, `free:${who.id.slice(5, 37)}`), period: day(freeDailyPerVisitor(env)) };
+      const limit = (resetsAt) => ({ ok: false, error: apiError(402, 'daily_limit', "Today's free Claude replies are used up.", { resets_at: resetsAt }) });
+      const a = await site.usage.hold(site.period, { inputCost, maxOutput: FREE_MAX_OUTPUT, outputPrice, minOutput: 256, maxHolds: 500 });
+      if (!a.ok) return a.reason === 'busy' ? { ok: false, error: apiError(429, 'rate_limit_error', 'Nova is busy right now. Try again in a moment.') } : limit(site.period.resetsAt);
+      const b = await visitor.usage.hold(visitor.period, { inputCost, maxOutput: a.maxTokens, outputPrice, minOutput: 256, maxHolds: 4 });
+      if (!b.ok) {
+        await site.usage.settle(site.period, a.id, 0);
+        return b.reason === 'busy' ? { ok: false, error: apiError(400, 'busy', 'Nova is already answering you. Wait for that reply to finish.') } : limit(visitor.period.resetsAt);
+      }
+      return {
+        ok: true, maxTokens: b.maxTokens,
+        settle: (cost) => Promise.all([site.usage.settle(site.period, a.id, cost), visitor.usage.settle(visitor.period, b.id, cost)]),
+      };
+    },
+  });
 }
 
 /** POST /v1/usage: how much of this month's Martia allowance a member has left. */
@@ -830,6 +905,7 @@ export default {
         paymentLink: !!linkRef(env),
         martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
         voice: await voiceInfo(env),
+        freeChats: freeInfo(env),
         codes: String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length,
         originAllowed: !origin || originOk,
         problems,
@@ -845,6 +921,7 @@ export default {
 
     try {
       if (request.method === 'POST' && path === '/ai/v1/messages') return await martia(request, env, ctx, cors);
+      if (request.method === 'POST' && path === '/free/v1/messages') return await freeChat(request, env, ctx, cors);
       if (request.method === 'POST' && (path === '/voice/v1/tts' || path === '/voice/v1/asr')) return await voice(request, env, path, cors);
       if (request.method === 'GET' && path === '/v1/plan') return json(200, await plan(env, { preview: url.searchParams.get('preview') === '1' }));
       if (request.method === 'POST' && ['/v1/verify', '/v1/portal', '/v1/usage'].includes(path)) {

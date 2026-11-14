@@ -16,7 +16,7 @@ import { cleanImagePrompt } from './tools/imagegen.js';
 import { openCanvas, closeCanvas, isCanvasOpen } from './tools/canvas.js';
 import { createRecognizer, canRecognize, canRecord, startRecording, speak, stopSpeaking, isSpeaking, openVoiceMode, unlockSpeech, formatDuration } from './tools/voice.js';
 import { initAccounts, signedIn, currentUser, openLogin, confirmLogOut, accountAvatar, requireAccount, checkoutParams } from './account.js';
-import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS, premiumAI, martiaIncluded } from './premium.js';
+import { isPremium, needsPremium, modelLocked, usableModel, requireModel, openPremium, premiumInfo, planLine, setPremiumHooks, handleCheckoutReturn, startPremiumChecks, FREE_MODEL, PREMIUM_MODELS, premiumAI, martiaIncluded, siteAI } from './premium.js';
 
 const S = {
   chat: null,
@@ -83,7 +83,7 @@ function updateTopbar() {
   const agent = getAgent(S.chat?.agentId);
   const locked = modelLocked(m.id);
   els.modelName.textContent = agent ? `${agent.name}` : m.name;
-  els.engineTag.textContent = agent ? m.name : locked ? 'Premium' : engineReady() || premiumAI(m.id) ? 'Claude' : 'On-device';
+  els.engineTag.textContent = agent ? m.name : locked ? 'Premium' : engineReady() || premiumAI(m.id) || (siteAI(m.id) && !siteAI(m.id).usedUp) ? 'Claude' : 'On-device';
   els.modelBtn.classList.toggle('locked', locked && !agent);
   els.modelBtn.title = locked ? `${m.name} needs Nova Premium` : '';
   if (els.upgrade) els.upgrade.hidden = isPremium();
@@ -101,7 +101,12 @@ function updateEngineCard() {
   const card = $('#engine-card');
   const on = engineReady();
   const included = !on && isPremium() && martiaIncluded();
-  card.innerHTML = `<span class="dot${on || included ? '' : ' local'}"></span><span><b>${on ? 'Claude connected' : included ? 'Martia included' : 'On-device engine'}</b><small>${on ? 'All six models run on Claude' : included ? 'Martia runs on Claude · others on-device' : 'Connect Claude for full AI'}</small></span>`;
+  const site = !on ? siteAI(FREE_MODEL) : null;
+  const free = !!site && !site.usedUp;
+  const freeUsed = !!site && site.usedUp;
+  const title = on ? 'Claude connected' : free ? 'Claude for everyone' : freeUsed ? 'On-device for today' : included ? 'Martia included' : 'On-device engine';
+  const sub = on ? 'All six models run on Claude' : free ? (included ? 'Martia on Claude Opus · others on Claude Haiku' : 'Free chats run on Claude Haiku') : freeUsed ? "Today's free Claude replies are used up · back tomorrow" : included ? 'Martia runs on Claude · others on-device' : 'Connect Claude for full AI';
+  card.innerHTML = `<span class="dot${on || included || free ? '' : ' local'}"></span><span><b>${title}</b><small>${sub}</small></span>`;
 }
 
 function updateProfile() {
@@ -111,7 +116,7 @@ function updateProfile() {
   av.outerHTML = accountAvatar(user ? { ...user, name } : { name }, 'avatar').replace('<span class="avatar', '<span id="profile-avatar" class="avatar');
   $('#profile-name').textContent = name;
   $('#profile-btn').title = user?.email || '';
-  $('#profile-sub').textContent = `${isPremium() ? 'Nova Premium' : 'Nova Free'} · ${engineReady() ? 'Claude' : 'on-device'}`;
+  $('#profile-sub').textContent = `${isPremium() ? 'Nova Premium' : 'Nova Free'} · ${engineReady() || (siteAI(FREE_MODEL) && !siteAI(FREE_MODEL).usedUp) ? 'Claude' : 'on-device'}`;
   $('#profile-btn').classList.toggle('premium', isPremium());
 }
 

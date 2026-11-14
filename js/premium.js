@@ -305,6 +305,27 @@ export function siteVoice() {
   return on ? { base: `${premiumServer()}/voice`, listening: cached.plan.voice.listening !== false } : null;
 }
 
+/**
+ * Free Claude chats for everyone: when the premium server has a Claude key, every
+ * model except Martia answers with Claude Haiku through it, within the server's
+ * daily limits. Returns where to send them, or null.
+ */
+const LS_FREE_USED = 'nova:free-ai-used-until';
+export function siteAI(modelId) {
+  if (needsPremium(modelId)) return null;
+  const cached = read(LS_PLAN);
+  if (!premiumServer() || cached?.server !== premiumServer() || !cached.plan?.free?.included) return null;
+  let until = 0;
+  try { until = Number(localStorage.getItem(LS_FREE_USED)) || 0; } catch { /* storage unavailable */ }
+  // The server ignores the key; the Claude SDK just needs one to send.
+  return { url: `${premiumServer()}/free`, key: 'nova-free', model: cached.plan.free.model || 'claude-haiku-5-5', usedUp: Date.now() < until, resetsAt: until || null };
+}
+/** Today's free Claude replies are used up (until `resetsAt`, or an hour if unknown). */
+export function noteFreeUsedUp(resetsAt) {
+  try { localStorage.setItem(LS_FREE_USED, String(resetsAt || Date.now() + 3600e3)); } catch { /* storage unavailable */ }
+  emit('premium', premiumInfo());
+}
+
 /** This month's allowance as last reported by the server: { left, budget, fraction, resetsAt, usedUp }. */
 export function allowanceInfo() {
   if (!allowance || allowance.key !== state?.key) return null;

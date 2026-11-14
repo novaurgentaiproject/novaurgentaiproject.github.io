@@ -29,6 +29,7 @@ Nova 3 Martia needs **Nova Premium**; the other five models are free. Free users
 
 - **Buying:** Premium is sold through a Stripe Payment Link and confirmed by a small Cloudflare Worker. [Set it up](premium-server/README.md). Until then, Nova says sign-ups aren't open yet.
 - **James for everyone:** with a Fish Audio key on the premium server, every visitor hears Nova in James's voice (voice mode and read-aloud), and Nova hears them through Fish Audio on every device. Daily limits per visitor and for the whole site cap the cost. [Details](premium-server/README.md#how-jamess-daily-limits-work).
+- **Claude for everyone:** with a Claude key on the premium server, every visitor's chats (all models except Martia) are answered by Claude Haiku 5.5, free, within daily limits ($0.10 a day for the whole site by default). Past them, Nova answers on-device until the next day. [Details](premium-server/README.md#free-claude-chats-for-everyone).
 - **Martia included:** members chat with Martia without an API key. The premium server answers with your Claude key, and gives each member a monthly allowance (default $4.70 of Claude usage, set by `MONTHLY_AI_BUDGET`). It counts each message before sending it, so a member can't go over. **Settings → Premium** shows how much is left. When it runs out, members can switch to a free model or use their own Claude key.
 - **Premium codes:** unlock Premium for yourself, friends or testers, with or without the server.
 - **With accounts on**, buying Premium asks people to log in first, and Premium is saved to their account.
@@ -100,7 +101,7 @@ __/auth/, __/firebase/ Firebase's sign-in helper pages, hosted here so Google si
 - Chats, settings and memory live in your browser (IndexedDB and localStorage).
 - With live data on, topic queries go to Wikipedia, Open-Meteo and Frankfurter.
 - Nova Cloud image prompts go to Pollinations.ai. Switch to **Nova Studio** in Settings to keep image generation on-device.
-- With Claude connected, messages go directly to Anthropic's API under your key.
+- With Claude connected, messages go directly to Anthropic's API under your key. Without your own key, free chats go through Nova's server to Anthropic's API (Claude Haiku); the server keeps only daily usage totals, not the chats.
 - With the voice server on, the text Nova speaks, and in Fish Audio listening mode your recorded voice, go through your voice server to Fish Audio. Nothing else is sent.
 - Accounts (when logged in): chats, memory, custom agents, personalization and Premium are stored in Firebase under your account, readable only by you. API keys stay on your device.
 - Nova Premium: payments happen on Stripe's checkout page. Nova stores your Premium key in your browser and sends it to the premium server to confirm your membership. Members' Nova 3 Martia chats (the conversation and its attachments) go through the premium server to Anthropic's API to be answered; the server keeps only each member's monthly usage total, not the chats.

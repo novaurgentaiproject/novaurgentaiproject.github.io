@@ -163,6 +163,16 @@ Then open Nova and tap **Upgrade**. You should see your price and "No API key ne
 - **Refusal fallbacks:** if Claude's safety checks decline a request, Claude may finish it on a fallback model. The server charges each model's own price.
 - **When it runs out,** Martia explains when it refills, and suggests switching to a free model or connecting their own Claude key in **Settings → Engine**. If they've connected their own key, Nova uses it automatically.
 
+## Free Claude chats for everyone
+
+With `ANTHROPIC_API_KEY` set, every visitor gets real Claude answers for free, on **Claude Haiku 5.5**, for every Nova model except Nova 3 Martia (which stays Premium, on Claude Opus 5.5). Nobody needs a key of their own.
+
+- **What it costs you:** Haiku 5.5 is $0.10 per million input tokens and $0.50 per million output tokens, about 0.1¢ for a typical reply.
+- **Daily limits** (reset at midnight UTC): the whole site's free chats can spend at most `FREE_AI_DAILY_TOTAL` per day (default **$0.10**, about 100 replies), and each visitor at most `FREE_AI_DAILY_PER_VISITOR` (default **$0.02**, about 20 replies). Replies are capped at 8,000 tokens, and conversations at 50,000.
+- **Past a limit,** Nova answers on-device instead, with a short note, and the sidebar says "On-device for today" until it resets.
+- People who connected their own Claude key keep using it; members keep Martia's monthly allowance.
+- Set `FREE_AI_DAILY_TOTAL` to `0` to turn free Claude chats off.
+
 ## How James's daily limits work
 
 - **Everyone gets James** in voice mode and read-aloud, with nothing to set up, and Nova hears them through Fish Audio.
@@ -171,7 +181,7 @@ Then open Nova and tap **Upgrade**. You should see your price and "No API key ne
 - **Past a limit,** Nova quietly switches to the device's own voice and speech recognition until the next day, with a short note.
 - **Free by default:** James talks on Fish Audio's free model (`s2.1-pro-free`), and Nova listens with the device's own speech recognition, since Fish Audio has no free listening model. That way James never costs you anything, even if your Fish account has credit.
 - **To use the paid voice and Fish Audio listening,** add `FISH_PAID` = `true` (type **Text**). Then the server uses your Fish credit, within the daily limits; when the credit runs out it switches back to the free model by itself (it checks the balance every 10 minutes).
-- **Privacy:** the server passes members' Martia conversations to Claude, and what James says plus people's voice recordings to Fish Audio. It keeps only usage totals (each member's for the month; each visitor's voice use for the day, under a scrambled form of their internet address), not chats or recordings.
+- **Privacy:** the server passes free chats and members' Martia conversations to Claude, and what James says plus people's voice recordings to Fish Audio. It keeps only usage totals (each member's for the month; each visitor's voice use for the day, under a scrambled form of their internet address), not chats or recordings.
 
 ## Premium codes
 
@@ -195,6 +205,8 @@ People enter codes in Nova's Upgrade screen (**Have a Premium code or key?**) or
 | `STRIPE_PAYMENT_LINK` | For payments | The Payment Link people buy Premium with: `plink_…` or `https://buy.stripe.com/…`. |
 | `ANTHROPIC_API_KEY` (secret) | For included Martia | Your Claude API key. Members' Martia chats are billed to it. |
 | `FISH_API_KEY` (secret) | For James's voice | Your Fish Audio API key. Everyone's use of James (speaking and listening) is billed to it. |
+| `FREE_AI_DAILY_TOTAL` | No | Most everyone's free Claude chats (Haiku 5.5) may cost per day, in US dollars. Default `0.10`; `0` turns them off. |
+| `FREE_AI_DAILY_PER_VISITOR` | No | One visitor's daily share of free Claude chats, in US dollars. Default `0.02`. |
 | `TEST_MODE_BUDGET` | No | Monthly Claude allowance for purchases made with a Stripe test key, in US dollars. Default `0.50`. |
 | `MONTHLY_AI_BUDGET` | No | Each member's monthly Martia allowance in US dollars. Default `4.70`. |
 | `FISH_PAID` | No | `true` to use Fish Audio's paid voice and listening (billed to your Fish credit). Without it, James uses the free model and costs nothing. |
