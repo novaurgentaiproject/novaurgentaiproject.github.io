@@ -50,7 +50,7 @@ Nova re-checks memberships every 6 hours, and the server checks again at least e
 
 Try everything in **test mode** first (the "Test mode" or "Sandbox" switch in the Stripe Dashboard), then repeat the steps in live mode.
 
-**While your Stripe key is a test key,** the server protects your Claude credit: the public sees "Premium sign-ups aren't open yet" (anyone could "pay" with Stripe's public test card), and test purchases get only a $0.50 monthly Claude allowance (). To see the Upgrade screen yourself, open  on your device ( to stop). When you switch to a live key, sign-ups open to everyone with the full allowance.
+**While your Stripe key is a test key,** the server protects your Claude credit: the public sees "Premium sign-ups aren't open yet" (anyone could "pay" with Stripe's public test card), and test purchases get only a $0.50 monthly Claude allowance (`TEST_MODE_BUDGET`). To see the Upgrade screen yourself, open `https://novaurgentaiproject.github.io/?preview=premium` on your device (`?preview=off` to stop). When you switch to a live key, sign-ups open to everyone with the full allowance.
 
 1. Sign in at [dashboard.stripe.com](https://dashboard.stripe.com) and open **Payment Links**, then **Create payment link** (or **+ New**).
 2. Add a product called **Nova Premium**, priced at **$9.99**, **Recurring**, **Monthly**.
