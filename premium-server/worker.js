@@ -28,9 +28,13 @@
 //   ANTHROPIC_API_KEY    (secret) your Claude API key, used for members' Martia
 //                        chats. Without it, Premium only unlocks Martia for
 //                        people who bring their own key.
-//   FISH_API_KEY         (secret) your Fish Audio API key, for James's voice
-//                        (speaking, and listening). Without it, Nova uses each
-//                        device's own voice.
+//   FISH_API_KEY         (secret) your Fish Audio API key, for James's voice.
+//                        Without it, Nova uses each device's own voice.
+//   FISH_PAID            (optional) "true" to use Fish Audio's paid voice model
+//                        and Fish Audio listening, billed to your Fish credit.
+//                        Otherwise (the default) James uses the free model and
+//                        Nova listens with the device's own speech recognition,
+//                        so voice never costs you anything.
 //   VOICE_DAILY_PER_VISITOR  (optional) most one visitor's voice use can cost per
 //                        day, in US dollars. Default 0.50. 0 = no limit.
 //   VOICE_DAILY_TOTAL    (optional) most everyone's voice use together can cost
@@ -566,7 +570,9 @@ const voiceEnabled = (env) => !!(env.FISH_API_KEY && env.USAGE);
 // talks on the free model and Nova listens with the device's own recognition
 // (Fish Audio has no free listening model).
 let fishCredit = null; // { at, credit } — credit is null when it couldn't be read
+const fishPaid = (env) => String(env.FISH_PAID || '').trim().toLowerCase() === 'true';
 async function fishHasCredit(env) {
+  if (!fishPaid(env)) return false; // free only: never spend Fish Audio credit
   if (fishCredit && Date.now() - fishCredit.at < 10 * 60e3) return fishCredit.credit == null ? true : fishCredit.credit > 0;
   let credit = null;
   try {
@@ -590,7 +596,7 @@ const siteDaily = (env) => dollarsSetting(env.VOICE_DAILY_TOTAL, 5);
 async function voiceInfo(env) {
   if (!voiceEnabled(env)) return { included: false };
   const paid = await fishHasCredit(env);
-  return { included: true, everyone: true, name: 'James', listening: paid, model: paid ? 's2.1-pro' : 's2.1-pro-free', dailyPerVisitor: visitorDaily(env), dailyTotal: siteDaily(env) };
+  return { included: true, everyone: true, name: 'James', paid: fishPaid(env), listening: paid, model: paid ? 's2.1-pro' : 's2.1-pro-free', dailyPerVisitor: visitorDaily(env), dailyTotal: siteDaily(env) };
 }
 
 /** Today (UTC) as an allowance period, with a budget in µ$ (0 dollars = no limit). */
@@ -642,7 +648,7 @@ async function voice(request, env, path, headers) {
   const fish = (p, init) => fetch(`${env.FISH_API_BASE || FISH_API}${p}`, { ...init, headers: { Authorization: `Bearer ${env.FISH_API_KEY}`, ...init.headers } });
 
   if (path === '/voice/v1/asr') {
-    if (!(await fishHasCredit(env))) return send(503, { status: 503, reason: 'no_credit', message: "listening through Fish Audio isn't available on this site" });
+    if (!(await fishHasCredit(env))) return send(503, { status: 503, reason: fishPaid(env) ? 'no_credit' : 'free_only', message: "listening through Fish Audio isn't available on this site" });
     const type = (request.headers.get('Content-Type') || 'audio/wav').split(';')[0].trim();
     if (!/^audio\/|^video\/|^application\/octet-stream$/.test(type)) return send(415, { status: 415, message: 'Send the recording as the request body with an audio/* Content-Type.' });
     const audio = await request.arrayBuffer();

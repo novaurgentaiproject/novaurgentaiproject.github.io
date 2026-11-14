@@ -24,7 +24,7 @@ With the price at **$9.99 a month**:
 | **You keep** | **at least about $4.70**, more when members use less |
 
 - **What a Martia reply costs:** Claude Opus 5.5 is $4 per million input tokens and $20 per million output tokens. A typical reply costs about 3–6¢, so $4.70 covers roughly 80–150 replies a month. Long conversations, attachments and long answers cost more.
-- **What James costs:** James is free for everyone, so his voice is a cost of running Nova rather than part of the membership. Fish Audio charges $15 per million bytes of text spoken (about 1¢ for a 600-character reply) and $0.36 per hour of listening (about 0.1¢ for a 10-second question). The daily limits (below) keep it to at most **$5 a day** (about $150 a month) unless you change them.
+- **What James costs:** nothing by default: he uses Fish Audio's free voice model. If you turn on the paid voice (`FISH_PAID`), Fish Audio charges $15 per million bytes of text spoken (about 1¢ for a 600-character reply) and $0.36 per hour of listening (about 0.1¢ for a 10-second question), and the daily limits (below) keep it to at most **$5 a day** unless you change them.
 - **Cloudflare:** the free plan is enough to start. If very long answers start failing with a "Worker exceeded CPU time" error, switch to Workers Paid ($5 a month).
 - **Taxes:** depending on where you and your members live, you may owe sales tax or VAT on memberships. [Stripe Tax](https://stripe.com/tax) can work it out.
 
@@ -167,7 +167,8 @@ Then open Nova and tap **Upgrade**. You should see your price and "No API key ne
 - **Each request is counted exactly:** each spoken sentence by the bytes of its text, each recording by its length in seconds. Failed requests count nothing.
 - **Two limits per day** (they reset at midnight UTC): one per visitor (`VOICE_DAILY_PER_VISITOR`, default $0.50) and one for the whole site (`VOICE_DAILY_TOTAL`, default $5.00). Visitors are told apart by their internet address, which Cloudflare provides; people sharing a network (such as a school or office) share one limit.
 - **Past a limit,** Nova quietly switches to the device's own voice and speech recognition until the next day, with a short note.
-- **Without Fish Audio credit** (a new account, or when it runs out), James talks on Fish Audio's free model, which may sound different or be slower, and Nova listens with the device's own speech recognition, since Fish Audio has no free listening model. The server checks your balance every 10 minutes and switches back by itself once you add credit.
+- **Free by default:** James talks on Fish Audio's free model (`s2.1-pro-free`), and Nova listens with the device's own speech recognition, since Fish Audio has no free listening model. That way James never costs you anything, even if your Fish account has credit.
+- **To use the paid voice and Fish Audio listening,** add `FISH_PAID` = `true` (type **Text**). Then the server uses your Fish credit, within the daily limits; when the credit runs out it switches back to the free model by itself (it checks the balance every 10 minutes).
 - **Privacy:** the server passes members' Martia conversations to Claude, and what James says plus people's voice recordings to Fish Audio. It keeps only usage totals (each member's for the month; each visitor's voice use for the day, under a scrambled form of their internet address), not chats or recordings.
 
 ## Premium codes
@@ -193,6 +194,7 @@ People enter codes in Nova's Upgrade screen (**Have a Premium code or key?**) or
 | `ANTHROPIC_API_KEY` (secret) | For included Martia | Your Claude API key. Members' Martia chats are billed to it. |
 | `FISH_API_KEY` (secret) | For James's voice | Your Fish Audio API key. Everyone's use of James (speaking and listening) is billed to it. |
 | `MONTHLY_AI_BUDGET` | No | Each member's monthly Martia allowance in US dollars. Default `4.70`. |
+| `FISH_PAID` | No | `true` to use Fish Audio's paid voice and listening (billed to your Fish credit). Without it, James uses the free model and costs nothing. |
 | `VOICE_DAILY_PER_VISITOR` | No | Most one visitor's use of James can cost per day, in US dollars. Default `0.50`; `0` = no limit. |
 | `VOICE_DAILY_TOTAL` | No | Most everyone's use of James can cost per day, in US dollars. Default `5.00`; `0` = no limit. |
 | `PREMIUM_CODES` (secret) | No | Comma-separated gift codes that unlock Premium. |
