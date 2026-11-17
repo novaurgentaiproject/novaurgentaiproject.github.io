@@ -17,7 +17,8 @@ Until the premium server is set up, nobody can buy Premium. Nova shows "Premium 
 You don't have to sell Premium. Leave out the Stripe settings (`STRIPE_SECRET_KEY` and `STRIPE_PAYMENT_LINK`), and Premium becomes **free by invitation**:
 
 - The Upgrade screen says "Nova Premium is free by invitation right now. Ask for a Premium code, then enter it below." With `PREMIUM_CONTACT` set (an `https://` link or an email address), it also shows an **Ask for a code** button.
-- You hand out codes from `PREMIUM_CODES` (a secret: codes separated by commas, each at least 6 letters or digits). Give each person their own code, so you can switch one off by deleting it.
+- You hand out codes. Keep them either in [`codes.js`](codes.js), as SHA-256 hashes (Cloudflare redeploys the server whenever it changes on GitHub, so nothing needs doing in Cloudflare), or in the `PREMIUM_CODES` secret (codes separated by commas, each at least 6 letters or digits). Give each person their own code, so you can switch one off by deleting it.
+- While Stripe is set up only in test mode, visitors see the same invitation, and the Stripe test checkout shows only on your device (`?preview=premium`).
 - Each code gets a small Martia allowance, `CODE_AI_BUDGET` (default **$0.50 a month**, about 10 Martia replies), because Martia's answers come out of your Claude credit.
 - Everything else works the same: Premium follows people to their other devices through their account, and free Claude chats and James's voice stay on for everyone.
 

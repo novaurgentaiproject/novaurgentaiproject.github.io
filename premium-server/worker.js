@@ -63,6 +63,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
+import { CODE_HASHES } from './codes.js';
 
 const DEFAULT_ORIGINS = [
   'https://novaurgentaiproject.github.io',
@@ -124,6 +125,9 @@ async function paymentLink(env) {
 }
 
 /** Price and checkout address, for Nova's Upgrade screen. */
+/** How many Premium codes there are: the PREMIUM_CODES setting plus codes.js. */
+const codeCount = (env) => String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length + CODE_HASHES.length;
+
 /** PREMIUM_CONTACT as a safe link: https://… or mailto:… (an email address becomes mailto:). */
 function contactLink(env) {
   const v = String(env.PREMIUM_CONTACT || '').trim();
@@ -141,12 +145,12 @@ async function plan(env, { preview = false } = {}) {
   const free = freeInfo(env);
   if (!env.STRIPE_SECRET_KEY || !linkRef(env)) {
     // No payments: Premium is free by invitation, with codes you hand out.
-    const codes = String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length;
-    return { available: false, reason: codes ? 'codes' : 'not-configured', contact: contactLink(env), ai, voice, free };
+    return { available: false, reason: codeCount(env) ? 'codes' : 'not-configured', contact: contactLink(env), ai, voice, free };
   }
   // Test mode: anyone could "pay" with Stripe's public test card, so only show the
   // plan to the site owner (who opens Nova with ?preview=premium).
-  if (stripeTestMode(env) && !preview) return { available: false, reason: 'test-mode', ai, voice, free };
+  // (Visitors are told to ask for a code instead, when there are codes.)
+  if (stripeTestMode(env) && !preview) return { available: false, reason: codeCount(env) ? 'codes' : 'test-mode', contact: contactLink(env), ai, voice, free };
   // Premium's main feature is Martia's answers; don't sell it until they're included.
   if (!aiEnabled(env)) return { available: false, reason: 'martia-not-ready', ai, voice, free };
   if (planCache?.ref === linkRef(env) && Date.now() - planCache.at < CACHE_MS) return { ...planCache.plan, ai, voice, free, ...(stripeTestMode(env) ? { testMode: true } : {}) };
@@ -231,6 +235,8 @@ async function verify(env, rawKey) {
   const n = norm(key);
   const codes = String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6);
   if (n && codes.some((c) => safeEqual(c, n))) return { premium: true, kind: 'gift', status: 'active', interval: null };
+  // Codes kept in this repository (codes.js), as hashes.
+  if (n.length >= 6 && CODE_HASHES.includes(await sha256hex(n))) return { premium: true, kind: 'gift', status: 'active', interval: null };
   return { premium: false, reason: 'invalid' };
 }
 
@@ -937,7 +943,7 @@ export default {
         martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
         voice: await voiceInfo(env),
         freeChats: freeInfo(env),
-        codes: String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length,
+        codes: codeCount(env),
         originAllowed: !origin || originOk,
         problems,
       }, { 'Access-Control-Allow-Origin': origin || '*' });
