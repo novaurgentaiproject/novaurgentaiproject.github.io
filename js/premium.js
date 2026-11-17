@@ -441,7 +441,12 @@ ${onFallback ? `<button class="btn pm-alt" data-fallback>Use ${esc(free.name)} i
       buy.onclick = () => { if (!hooks.requireAccount || hooks.requireAccount(go, 'Log in or sign up to get Premium. It stays with your account on every device.')) go(); };
       $('[data-fine]').textContent = `Payments are handled securely by Stripe; Nova never sees your card.${plan.interval ? ' Cancel anytime in Settings → Premium.' : ''}${plan.ai?.included ? " Members' Martia chats are sent through Nova's premium server to Anthropic (Claude) to be answered." : ''}`;
     } else {
-      $('[data-plan]').innerHTML = `<div class="pm-soon">${icon('clock', 'icon-sm')}<span>Premium sign-ups aren't open yet. If you have a Premium code, enter it below.</span></div>`;
+      // Free by invitation: the site owner hands out Premium codes.
+      const invite = plan?.reason === 'codes';
+      const contact = /^(https:\/\/|mailto:)/i.test(plan?.contact || '') ? plan.contact : '';
+      $('[data-plan]').innerHTML = invite
+        ? `<div class="pm-soon">${icon('crown', 'icon-sm')}<span>Nova Premium is free by invitation right now. Ask for a Premium code, then enter it below.</span></div>${contact ? `<a class="btn pm-alt" href="${esc(contact)}" target="_blank" rel="noopener">${icon('external', 'icon-sm')} Ask for a code</a>` : ''}`
+        : `<div class="pm-soon">${icon('clock', 'icon-sm')}<span>Premium sign-ups aren't open yet. If you have a Premium code, enter it below.</span></div>`;
       buy.hidden = true;
       $('.pm-code').open = true;
       $('[data-fine]').textContent = '';

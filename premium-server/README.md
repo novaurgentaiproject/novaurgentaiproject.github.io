@@ -12,6 +12,17 @@ You can also hand out **Premium codes** to yourself, friends or testers.
 
 Until the premium server is set up, nobody can buy Premium. Nova shows "Premium sign-ups aren't open yet", and Premium codes still work. Sign-ups also stay closed until `ANTHROPIC_API_KEY` is added, because Premium's main feature, Martia's answers, needs it.
 
+## Free by invitation (no payments)
+
+You don't have to sell Premium. Leave out the Stripe settings (`STRIPE_SECRET_KEY` and `STRIPE_PAYMENT_LINK`), and Premium becomes **free by invitation**:
+
+- The Upgrade screen says "Nova Premium is free by invitation right now. Ask for a Premium code, then enter it below." With `PREMIUM_CONTACT` set (an `https://` link or an email address), it also shows an **Ask for a code** button.
+- You hand out codes from `PREMIUM_CODES` (a secret: codes separated by commas, each at least 6 letters or digits). Give each person their own code, so you can switch one off by deleting it.
+- Each code gets a small Martia allowance, `CODE_AI_BUDGET` (default **$0.50 a month**, about 10 Martia replies), because Martia's answers come out of your Claude credit.
+- Everything else works the same: Premium follows people to their other devices through their account, and free Claude chats and James's voice stay on for everyone.
+
+To start selling later, add the Stripe settings back.
+
 ## The money
 
 With the price at **$9.99 a month**:
@@ -201,12 +212,14 @@ People enter codes in Nova's Upgrade screen (**Have a Premium code or key?**) or
 
 | Variable | Required | What it does |
 |---|---|---|
-| `STRIPE_SECRET_KEY` (secret) | For payments | Stripe restricted key (or secret key) used to confirm purchases. |
-| `STRIPE_PAYMENT_LINK` | For payments | The Payment Link people buy Premium with: `plink_…` or `https://buy.stripe.com/…`. |
+| `STRIPE_SECRET_KEY` (secret) | Only to sell Premium | Stripe restricted key (or secret key) used to confirm purchases. |
+| `STRIPE_PAYMENT_LINK` | Only to sell Premium | The Payment Link people buy Premium with: `plink_…` or `https://buy.stripe.com/…`. |
 | `ANTHROPIC_API_KEY` (secret) | For included Martia | Your Claude API key. Members' Martia chats are billed to it. |
 | `FISH_API_KEY` (secret) | For James's voice | Your Fish Audio API key. Everyone's use of James (speaking and listening) is billed to it. |
 | `FREE_AI_DAILY_TOTAL` | No | Most everyone's free Claude chats (Haiku 5.5) may cost per day, in US dollars. Default `0.10`; `0` turns them off. |
 | `FREE_AI_DAILY_PER_VISITOR` | No | One visitor's daily share of free Claude chats, in US dollars. Default `0.02`. |
+| `CODE_AI_BUDGET` | No | Each Premium code's monthly Martia allowance, in US dollars. Default `0.50`. |
+| `PREMIUM_CONTACT` | No | Where people ask you for a code (an `https://` link or an email address). Shown as **Ask for a code** on the Upgrade screen when there are no Stripe settings. |
 | `TEST_MODE_BUDGET` | No | Monthly Claude allowance for purchases made with a Stripe test key, in US dollars. Default `0.50`. |
 | `MONTHLY_AI_BUDGET` | No | Each member's monthly Martia allowance in US dollars. Default `4.70`. |
 | `FISH_PAID` | No | `true` to use Fish Audio's paid voice and listening (billed to your Fish credit). Without it, James uses the free model and costs nothing. |

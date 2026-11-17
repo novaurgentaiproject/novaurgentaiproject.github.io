@@ -50,7 +50,13 @@
 //                        (In test mode, the Upgrade button only shows to people
 //                        who open Nova with ?preview=premium, i.e. you.)
 //   PREMIUM_CODES        (secret, optional) comma-separated gift codes that
-//                        unlock Premium. Remove a code to switch it off.
+//                        unlock Premium. Remove a code to switch it off. With
+//                        no Stripe settings, codes are the only way to get
+//                        Premium ("free by invitation").
+//   CODE_AI_BUDGET       (optional) each code's monthly Martia allowance, in US
+//                        dollars. Default 0.50.
+//   PREMIUM_CONTACT      (optional) where people ask you for a code: an https://
+//                        link or an email address. Shown on the Upgrade screen.
 //   ALLOWED_ORIGINS      (optional) comma-separated sites allowed to use this
 //                        server. Defaults to the Nova site plus localhost.
 // Binding (in wrangler.toml): USAGE, the MemberUsage Durable Object.
@@ -118,13 +124,26 @@ async function paymentLink(env) {
 }
 
 /** Price and checkout address, for Nova's Upgrade screen. */
+/** PREMIUM_CONTACT as a safe link: https://… or mailto:… (an email address becomes mailto:). */
+function contactLink(env) {
+  const v = String(env.PREMIUM_CONTACT || '').trim();
+  if (/^https:\/\/[^\s"'<>]+$/i.test(v)) return v;
+  if (/^mailto:[^\s"'<>@]+@[^\s"'<>@]+$/i.test(v)) return v;
+  if (/^[^\s"'<>@:/]+@[^\s"'<>@/]+\.[a-z]{2,}$/i.test(v)) return `mailto:${v}`;
+  return null;
+}
+
 const stripeTestMode = (env) => /^(sk|rk)_test_/.test(String(env.STRIPE_SECRET_KEY || ''));
 
 async function plan(env, { preview = false } = {}) {
   const ai = aiInfo(env);
   const voice = await voiceInfo(env);
   const free = freeInfo(env);
-  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) return { available: false, reason: 'not-configured', ai, voice, free };
+  if (!env.STRIPE_SECRET_KEY || !linkRef(env)) {
+    // No payments: Premium is free by invitation, with codes you hand out.
+    const codes = String(env.PREMIUM_CODES || '').split(',').map(norm).filter((c) => c.length >= 6).length;
+    return { available: false, reason: codes ? 'codes' : 'not-configured', contact: contactLink(env), ai, voice, free };
+  }
   // Test mode: anyone could "pay" with Stripe's public test card, so only show the
   // plan to the site owner (who opens Nova with ?preview=premium).
   if (stripeTestMode(env) && !preview) return { available: false, reason: 'test-mode', ai, voice, free };
@@ -293,11 +312,20 @@ function testModeBudget(env) {
   return Number.isFinite(n) && n >= 0 ? n : 0.5;
 }
 
+/** Each gift code's monthly Claude allowance, in dollars (codes are handed out free). */
+function codeBudget(env) {
+  const n = Number.parseFloat(env.CODE_AI_BUDGET);
+  return Number.isFinite(n) && n >= 0 ? n : 0.5;
+}
+
 /** The member's current allowance period: their billing period, or the calendar month. */
 function periodFor(env, m) {
   // Purchases made with a Stripe test key get only a small allowance: test
   // payments cost nothing, but their Martia replies spend real Claude credit.
-  const perMonth = (m.kind === 'stripe' && stripeTestMode(env) ? Math.min(testModeBudget(env), monthlyBudget(env)) : monthlyBudget(env)) * 1e6;
+  // Gift codes are free, so they get a small allowance too.
+  const perMonth = (m.kind === 'stripe' && stripeTestMode(env) ? Math.min(testModeBudget(env), monthlyBudget(env))
+    : m.kind === 'gift' ? codeBudget(env)
+      : monthlyBudget(env)) * 1e6;
   if (m.kind === 'stripe' && m.periodStart && m.periodEnd) {
     const months = { day: 1 / 30, week: 7 / 30, month: 1, year: 12 }[m.interval] ?? 1;
     return { id: `p${m.periodStart}`, resetsAt: m.periodEnd, budget: Math.round(perMonth * months * (m.intervalCount || 1)) };
@@ -844,8 +872,10 @@ async function claudeProblem(env) {
 /** Setup checks shown on the health page, so problems are easy to spot. */
 async function setupProblems(env) {
   const problems = [];
-  if (!env.STRIPE_SECRET_KEY) problems.push('Add STRIPE_SECRET_KEY (a secret) under Settings → Variables and Secrets.');
-  if (!linkRef(env)) problems.push('Add STRIPE_PAYMENT_LINK: your Payment Link\'s ID (plink_…) or address (https://buy.stripe.com/…).');
+  // Stripe is optional: without it, Premium is free by invitation (codes only).
+  const stripeOn = !!(env.STRIPE_SECRET_KEY || linkRef(env));
+  if (stripeOn && !env.STRIPE_SECRET_KEY) problems.push('Add STRIPE_SECRET_KEY (a secret) under Settings → Variables and Secrets, or remove STRIPE_PAYMENT_LINK to hand out free codes instead.');
+  if (stripeOn && !linkRef(env)) problems.push('Add STRIPE_PAYMENT_LINK: your Payment Link\'s ID (plink_…) or address (https://buy.stripe.com/…), or remove STRIPE_SECRET_KEY to hand out free codes instead.');
   const ai = await claudeProblem(env);
   if (ai) problems.push(ai);
   if (!env.FISH_API_KEY) problems.push("Add FISH_API_KEY (a secret) so everyone hears Nova in James's voice.");
@@ -903,6 +933,7 @@ export default {
         service: 'nova-premium', ok: !problems.length,
         stripe: !!key, mode: /^(sk|rk)_live_/.test(key) ? 'live' : /^(sk|rk)_test_/.test(key) ? 'test' : null,
         paymentLink: !!linkRef(env),
+        premium: env.STRIPE_SECRET_KEY && linkRef(env) ? 'stripe' : 'codes only',
         martia: aiEnabled(env) ? { included: true, model: MARTIA_MODEL, monthlyBudget: monthlyBudget(env) } : { included: false },
         voice: await voiceInfo(env),
         freeChats: freeInfo(env),
